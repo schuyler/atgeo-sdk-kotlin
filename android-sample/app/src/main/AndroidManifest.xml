@@ -3,7 +3,7 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <application android:label="atgeo sample">
+    <application android:label="atgeo sample" android:largeHeap="true">
         <activity
             android:name=".MainActivity"
             android:exported="true">
