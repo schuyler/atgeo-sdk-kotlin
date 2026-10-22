@@ -73,6 +73,90 @@ class TransportTest {
         }
     }
 
+    // Contract §4.4: fetch's Request refuses these before any request. Before the check, the default
+    // transport failed a relative or javascript: URL with MalformedURLException and a file: or ftp: URL
+    // with ClassCastException, and fetched a URL with credentials (dropping them) as a used tile.
+    @Nested
+    @DisplayName("refused tile URLs (no reference counterpart)")
+    inner class RefusedTileUrls {
+        private val emptyTile = HttpResponse(200, """{"records": []}""".toByteArray())
+
+        @TestFactory
+        fun `fails the tile without a request`(): List<DynamicTest> = listOf(
+            "/tiles/a.json",
+            "tiles/a.json",
+            "//tiles.example/a.json",
+            "file:///etc/passwd",
+            "ftp://tiles.example/a.json",
+            "javascript:alert(1)",
+            "data:application/json,{}",
+            "https://user:pw@tiles.example/a.json",
+            "https://user@tiles.example/a.json",
+            "https://:pw@tiles.example/a.json",
+            "https://@tiles.example/a.json",
+            "HTTPS://U:P@[::1]:8443/a.json",
+            "https://tiles.example\\@evil.example/a.json",
+            "https:///a.json",
+            "https://",
+            "https://:443/a.json",
+            "https:tiles.example/a.json",
+            "httpſ://tiles.example/a.json",
+        ).map { url ->
+            dynamicTest(url) {
+                runTest {
+                    val asked = mutableListOf<String>()
+                    val server = FakeServer(tilesFor = { TilesAnswer.Urls(listOf(url)) })
+                    val transport = HttpTransport { u -> if ("/xrpc/" in u) server.get(u) else { asked += u; emptyTile } }
+                    val result = client(transport).searchPlaces(region)
+                    assertEquals(SearchResult.TileCounts(fetched = 0, failed = 1), result.tiles)
+                    assertEquals(false, result.complete)
+                    assertEquals(emptyList(), asked)
+                }
+            }
+        }
+
+        @TestFactory
+        fun `fetches an http or https URL exactly as given`(): List<DynamicTest> = listOf(
+            "https://tiles.example/a.json",
+            "http://tiles.example:8080/a.json?v=1#f",
+            "HTTPS://Tiles.Example/a.json",
+            "HtTp://tiles.example/a.json",
+            "http://[::1]:8000/a.json",
+            "https://[2001:db8::1]/a.json",
+            "https://tiles.example/a@b.json?u=x@y#@",
+            "https://tiles.example?x",
+            "https://tiles.example",
+            "https://tiles.example\\a.json",
+            " https://tiles.example/a.json\n",
+            "ht\ttps://tiles.example/a.json",
+        ).map { url ->
+            dynamicTest(url.replace("\n", "\\n").replace("\t", "\\t")) {
+                runTest {
+                    val asked = mutableListOf<String>()
+                    val server = FakeServer(tilesFor = { TilesAnswer.Urls(listOf(url)) })
+                    val transport = HttpTransport { u -> if ("/xrpc/" in u) server.get(u) else { asked += u; emptyTile } }
+                    val result = client(transport).searchPlaces(region)
+                    assertEquals(SearchResult.TileCounts(fetched = 1, failed = 0), result.tiles)
+                    assertEquals(listOf(url), asked)
+                }
+            }
+        }
+
+        @Test
+        fun `fails only the refused tile and keeps the rest`() = runTest {
+            val good = tileUrl("a")
+            val server = twoTiles()
+            val urls = listOf("file:///etc/passwd", good)
+            val transport = HttpTransport { u ->
+                if ("/xrpc/" in u) FakeServer(tilesFor = { TilesAnswer.Urls(urls) }).get(u) else server.get(u)
+            }
+            val result = client(transport).searchPlaces(region)
+            assertEquals(SearchResult.TileCounts(fetched = 1, failed = 1), result.tiles)
+            assertEquals(listOf(placeOrigin("a")), result.places.map { it.origin })
+            assertEquals(listOf(good), server.requests)
+        }
+    }
+
     @Nested
     @DisplayName("typed server errors")
     inner class TypedServerErrors {

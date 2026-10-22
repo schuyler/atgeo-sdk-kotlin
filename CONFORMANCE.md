@@ -32,6 +32,18 @@ Normalization lowercases with `String.lowercase()`, which is `toLowerCase(Locale
 
 Step 3's second lowercase carries the same difference to the mathematical capital sigmas (U+1D6BA `𝚺` and its four other styles), which NFKD turns into Σ. Ordinary words, the abbreviations in the fixture and `𝚺𝚨𝚺` agree. A name would have to put a capital sigma next to a digit or a combining mark to tell the two apart, and then they differ by one letter, σ against ς, which moves that name's similarity score slightly.
 
+## Refused tile URLs (contract §4.4)
+
+Before any transport sees a tile URL, the app's included, the client checks that it is an absolute `http` or `https` URL with a host and no credentials, as the Fetch standard's `Request` does in the reference; a URL that is not is a failed tile and no request is made. The check reads the URL as WHATWG URL parsing would where that is cheap: leading and trailing spaces and C0 controls are ignored, tab, LF and CR are ignored anywhere, the scheme is matched without regard to ASCII case, and the authority ends at `/`, `\`, `?` or `#`. The URL the transport gets is the one the tile list gave, unchanged. Where the check and `fetch` differ:
+
+| Tile URL | Reference (`fetch`) | This port |
+|---|---|---|
+| `https://@h/x`, `https://:@h/x` (empty userinfo) | the userinfo dropped, the URL fetched | a failed tile, as in the Python and Rust ports: any `@` before the host is refused |
+| `https://h\@x/y` | host `h`, path `/@x/y`, fetched | a failed tile: the `@` is looked for up to the first `/`, `?` or `#`, because `java.net.URL` does not end the authority at a backslash and reads userinfo `h\` at host `x` |
+| `https:h/x`, `https:/h/x`, `https:///h/x` | fetched from host `h`: WHATWG ignores missing or extra slashes after a special scheme | a failed tile: the check wants exactly `://`, as the Rust port's does |
+
+A URL the check accepts can still fail in the transport where WHATWG would have cleaned it up: the default transport does not drop a tab or newline inside a URL, or read a backslash as `/`, so such a tile fails there as a transport error. `java.net.URL` trims the same characters at the ends that WHATWG does. Pinned by `TransportTest`.
+
 ## Ordering a NaN distance (contract §8)
 
 The reference orders by subtracting (`a.distance - b.distance`), so a NaN distance compares as a tie with everything, which makes the comparator inconsistent and the resulting order engine-defined. Only out-of-range coordinates in place data (a latitude past ±90) can produce one. This port compares instead of subtracting, ties `-0` with `0` exactly as subtraction does, and sorts a NaN after every number, because Java's sort may throw on an inconsistent comparator.

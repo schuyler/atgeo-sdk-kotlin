@@ -140,6 +140,32 @@ private fun InputStream.readAtMost(limit: Int): ByteArray {
 // Android API 33, above the floor.
 internal fun encodeQueryValue(value: String): String = URLEncoder.encode(value, "UTF-8").replace("+", "%20")
 
+/**
+ * Whether a tile URL may be fetched (contract §4.4): an absolute `http` or `https` URL with a host and
+ * no credentials, which is what the Fetch standard's `Request` accepts in the reference. Checked before
+ * any transport, the app's included, sees the URL; the URL itself is passed on exactly as given.
+ */
+internal fun isHttpUrl(url: String): Boolean {
+    // WHATWG trims leading and trailing C0 controls and spaces and drops tab, LF and CR anywhere.
+    // java.net.URL trims the same characters at the ends.
+    val u = url.trim { it <= ' ' }.filterNot { it == '\t' || it == '\n' || it == '\r' }
+    val sep = u.indexOf("://")
+    if (sep < 0) return false
+    // ASCII only: ignoreCase would let "httpſ" (long s) pass as "https".
+    val scheme = u.substring(0, sep)
+    if (scheme.any { it >= '\u0080' } || scheme.lowercase() !in HTTP_SCHEMES) return false
+    val rest = u.substring(sep + 3)
+    // Any @ is refused, an empty userinfo (`https://@h/x`) included, which fetch would drop. It is looked
+    // for up to the first / ? or #, past a backslash, where WHATWG and OkHttp end the authority, because
+    // java.net.URL does not: it reads `https://h\@x/y` as userinfo `h\` at host x. CONFORMANCE.md.
+    if ('@' in rest.takeWhile { it != '/' && it != '?' && it != '#' }) return false
+    val authority = rest.takeWhile { it != '/' && it != '\\' && it != '?' && it != '#' }
+    val host = if (authority.startsWith('[')) authority.substring(1).substringBefore(']') else authority.substringBefore(':')
+    return host.isNotEmpty()
+}
+
+private val HTTP_SCHEMES = setOf("http", "https")
+
 /** The XRPC and tile layer above the transport seam: URLs, status checks, error bodies. */
 internal class Xrpc(server: String, private val transport: HttpTransport) {
     private val base = server.trimEnd('/')

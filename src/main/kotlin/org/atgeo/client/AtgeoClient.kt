@@ -139,8 +139,9 @@ public class AtgeoClient internal constructor(
 
     // The tile's cache entry and records, or null if it failed. Checks the cache when the worker reaches
     // the URL, as the reference does, so recency is touched in the same order. A cached body parsed once
-    // already, so parsing it again cannot fail.
+    // already, so parsing it again cannot fail. A URL that fetch would refuse fails without a request.
     private suspend fun loadTile(url: String): Pair<TileCache.Entry, List<TileRecord>>? {
+        if (!isHttpUrl(url)) return null
         mutex.withLock { tiles.get(url)?.let { it to parsed.get(url, it) } }?.let { (entry, records) ->
             return entry to (records ?: readTilePayload(parseBody(entry.body)))
         }
