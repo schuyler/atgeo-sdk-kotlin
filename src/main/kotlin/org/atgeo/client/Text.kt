@@ -14,12 +14,14 @@ private val WHITESPACE: Set<Int> = (
     ).toSet()
 
 /**
- * Lowercase (locale-independent full case mapping), NFKD, drop nonspacing
- * marks, collapse whitespace runs to one space and trim (contract §7).
+ * Lowercase (locale-independent full case mapping), NFKD, lowercase again, drop
+ * nonspacing marks, collapse whitespace runs to one space and trim (contract §7).
  */
 internal fun normalize(s: String): String {
     // lowercase() is toLowerCase(Locale.ROOT); the default locale would turn I into ı on a Turkish device.
-    val folded = Normalizer.normalize(s.lowercase(), Normalizer.Form.NFKD)
+    // The second pass catches capitals NFKD makes from characters with no lowercase of their own (ℌ, 𝐇);
+    // on text that is already lowercase it changes nothing.
+    val folded = Normalizer.normalize(s.lowercase(), Normalizer.Form.NFKD).lowercase()
     val out = StringBuilder(folded.length)
     var pendingSpace = false
     var i = 0
