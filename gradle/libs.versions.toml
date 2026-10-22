@@ -19,6 +19,7 @@ junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
 android-api-signature = { module = "com.toasttab.android:gummy-bears-api-24", version.ref = "gummy-bears" }
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
+coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

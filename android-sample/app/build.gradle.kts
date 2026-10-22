@@ -4,7 +4,7 @@ plugins {
 
 android {
     namespace = "org.atgeo.sample"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "org.atgeo.sample"
@@ -17,4 +17,6 @@ android {
 
 dependencies {
     implementation("org.atgeo:atgeo-client")
+    implementation(libs.okhttp)
+    implementation(libs.coroutines.android)
 }

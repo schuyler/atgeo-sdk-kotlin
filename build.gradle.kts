@@ -42,6 +42,26 @@ dependencies {
     signature(variantOf(libs.android.api.signature) { artifactType("signature") })
 }
 
+// End to end against a running garganorn (scripts/e2e.ts in the JS repository): ./gradlew e2e
+// with ATGEO_SERVER, ATGEO_DATASET, ATGEO_COLLECTION and ATGEO_REGION. Compiled by check, run only on demand.
+val e2e: SourceSet = sourceSets.create("e2e") {
+    compileClasspath += sourceSets.main.get().output
+    runtimeClasspath += sourceSets.main.get().output
+}
+configurations[e2e.implementationConfigurationName].extendsFrom(configurations.implementation.get())
+configurations[e2e.runtimeOnlyConfigurationName].extendsFrom(configurations.runtimeOnly.get())
+
+tasks.register<JavaExec>("e2e") {
+    group = "verification"
+    description = "Runs the end-to-end check against the garganorn named by ATGEO_SERVER."
+    classpath = e2e.runtimeClasspath
+    mainClass = "org.atgeo.client.e2e.E2eKt"
+}
+
+tasks.check {
+    dependsOn(e2e.classesTaskName)
+}
+
 animalsniffer {
     sourceSets = listOf(project.sourceSets.main.get())
 }
