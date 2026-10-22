@@ -1,6 +1,5 @@
 package org.atgeo.client
 
-import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -98,7 +97,7 @@ class WireTest {
         @TestFactory
         fun `throws without a records array`(): List<DynamicTest> =
             listOf("{}", "[]", "null", "5", """{"records": {}}""", """{"records": "x"}""").map { text ->
-                dynamicTest(text) { assertFailsWith<SerializationException> { readTilePayload(json(text)) } }
+                dynamicTest(text) { assertFailsWith<AtgeoDecodingException> { readTilePayload(json(text)) } }
             }
     }
 
@@ -113,7 +112,7 @@ class WireTest {
         @TestFactory
         fun `throws without a tiles array`(): List<DynamicTest> =
             listOf("{}", "[]", "null", """{"tiles": "x"}""", """{"tiles": null}""").map { text ->
-                dynamicTest(text) { assertFailsWith<SerializationException> { readTileList(json(text)) } }
+                dynamicTest(text) { assertFailsWith<AtgeoDecodingException> { readTileList(json(text)) } }
             }
     }
 
@@ -130,7 +129,7 @@ class WireTest {
         @TestFactory
         fun `throws without an object record`(): List<DynamicTest> =
             listOf("{}", "null", "[]", """{"record": null}""", """{"record": [1]}""", """{"record": "x"}""").map { text ->
-                dynamicTest(text) { assertFailsWith<SerializationException> { readPlace(json(text)) } }
+                dynamicTest(text) { assertFailsWith<AtgeoDecodingException> { readPlace(json(text)) } }
             }
     }
 
@@ -196,8 +195,8 @@ class WireTest {
         fun `throws for a body that is not an object`(): List<DynamicTest> =
             listOf("null", "[]", "5", "\"x\"", "false").flatMap { text ->
                 listOf(
-                    dynamicTest("describeService $text") { assertFailsWith<SerializationException> { readServiceDescription(json(text)) } },
-                    dynamicTest("describeTileset $text") { assertFailsWith<SerializationException> { readTileset(json(text)) } },
+                    dynamicTest("describeService $text") { assertFailsWith<AtgeoDecodingException> { readServiceDescription(json(text)) } },
+                    dynamicTest("describeTileset $text") { assertFailsWith<AtgeoDecodingException> { readTileset(json(text)) } },
                 )
             }
     }
