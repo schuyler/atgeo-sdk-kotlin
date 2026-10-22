@@ -184,7 +184,8 @@ class HttpUrlConnectionTransportTest {
     }
 
     // Privacy (contract §12): the transport adds only fixed headers of its own, the same on every request.
-    // useCaches = false makes the JDK add Pragma and Cache-Control (both "no-cache"); Accept-Encoding is always gzip.
+    // useCaches = false makes the JDK add Pragma and Cache-Control (both "no-cache"); Accept-Encoding is always gzip,
+    // and User-Agent always the library's own.
     @Test
     fun `sends a fixed set of headers, Accept application-json among them, identical across requests`() = runBlocking {
         transport.get("$base/headers/a?bbox=1.00,2.00,3.00,4.00")
@@ -194,6 +195,8 @@ class HttpUrlConnectionTransportTest {
         assertEquals(first, second)
         assertEquals(listOf("application/json"), first["accept"])
         assertEquals(listOf("gzip"), first["accept-encoding"])
+        // Not the platform's: Android's names the device model.
+        assertEquals(listOf("atgeo-client-kotlin"), first["user-agent"])
         val allowed = setOf("accept", "accept-encoding", "user-agent", "host", "connection", "pragma", "cache-control")
         assertTrue(allowed.containsAll(first.keys), "unexpected request headers: ${first.keys - allowed}")
     }

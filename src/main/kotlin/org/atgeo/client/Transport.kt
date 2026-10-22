@@ -52,7 +52,8 @@ public class AtgeoDecodingException(message: String, cause: Throwable? = null) :
 
 /**
  * The default transport: `java.net.HttpURLConnection`, on every JVM and Android version with no
- * dependency. It asks for gzip and decodes it, which the JDK does not do on its own. Cancelling the
+ * dependency. It sends `User-Agent: atgeo-client-kotlin` in place of the platform's, which on Android
+ * names the device model. It asks for gzip and decodes it, which the JDK does not do on its own. Cancelling the
  * caller returns at once; on the JDK the socket may keep reading a body
  * already in progress until it ends or `readTimeoutMillis` passes, because `disconnect()` does not
  * interrupt that read. Apps that cancel often should supply a transport that tears requests down on
@@ -97,6 +98,9 @@ public class HttpUrlConnectionTransport(
                 connection.readTimeout = readTimeoutMillis
                 connection.useCaches = false
                 connection.setRequestProperty("Accept", "application/json")
+                // Without this Android sends its http.agent, which names the OS release, the device model
+                // and its firmware build (contract §12). The JDK's own is Java/<version>.
+                connection.setRequestProperty("User-Agent", USER_AGENT)
                 // The JDK never asks for gzip, and tiles are about 10x smaller with it. Asking
                 // explicitly turns off Android's transparent decoding, so decode here on both.
                 connection.setRequestProperty("Accept-Encoding", "gzip")
@@ -115,6 +119,9 @@ public class HttpUrlConnectionTransport(
         }
     }
 }
+
+// The same on every device, so it identifies the library and nothing about the phone.
+internal const val USER_AGENT = "atgeo-client-kotlin"
 
 /** Reads to the end, or throws as soon as the stream has given more than `limit` bytes. */
 private fun InputStream.readAtMost(limit: Int): ByteArray {
