@@ -1,8 +1,17 @@
 package org.atgeo.client
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.SerializationException
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicInteger
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.DynamicTest
 import org.junit.jupiter.api.DynamicTest.dynamicTest
@@ -13,6 +22,9 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertNotSame
+import kotlin.test.assertSame
+import kotlin.test.assertTrue
 
 private val region = Region.Bbox(-122.42, 37.77, -122.41, 37.78)
 
@@ -71,6 +83,171 @@ class TransportTest {
             assertEquals(false, result.complete)
             assertEquals(SearchResult.TileCounts(fetched = 0, failed = 2), result.tiles)
         }
+    }
+
+    @Nested
+    @DisplayName("tile failures (no reference counterpart: the reference reports none)")
+    inner class TileFailures {
+        private val ok = tileUrl("b")
+        private val okTile = FakeTile(ok, listOf(record(place("b", "B", listOf(point(37.774, -122.414))))))
+
+        /** A server listing `urls`, serving `okTile`, and answering anything in `responses` as given. */
+        private fun serverFor(urls: List<String>, responses: Map<String, HttpResponse> = emptyMap()) =
+            FakeServer(tilesets = listOf(overture(listOf(okTile))), tilesFor = { TilesAnswer.Urls(urls) }, responses = responses)
+
+        private fun SearchResult.summary() = tileFailures.map { Triple(it.url, it.kind, it.status) }
+
+        @Test
+        fun `is empty when every tile loads`() = runTest {
+            val result = client(twoTiles()).searchPlaces(region)
+            assertEquals(emptyList(), result.tileFailures)
+            assertEquals(true, result.complete)
+        }
+
+        @Test
+        fun `reports a refused URL, with no request`() = runTest {
+            val server = serverFor(listOf("file:///etc/passwd", ok))
+            val result = client(server).searchPlaces(region)
+            assertEquals(listOf(Triple("file:///etc/passwd", TileFailure.Kind.REFUSED, null)), result.summary())
+            assertIs<java.net.MalformedURLException>(result.tileFailures.single().error)
+            assertEquals(listOf(ok), server.requests.filter { "/xrpc/" !in it })
+        }
+
+        @TestFactory
+        fun `reports a non-2xx as STATUS with its status and AtgeoException`(): List<DynamicTest> = listOf(
+            404 to """{"error": "TileNotFound", "message": "gone"}""",
+            500 to "upstream error",
+            503 to "",
+        ).map { (status, body) ->
+            dynamicTest("$status") {
+                runTest {
+                    val bad = tileUrl("a")
+                    val result = client(serverFor(listOf(bad, ok), mapOf(bad to HttpResponse(status, body.toByteArray())))).searchPlaces(region)
+                    assertEquals(listOf(Triple(bad, TileFailure.Kind.STATUS, status)), result.summary())
+                    val error = assertIs<AtgeoException>(result.tileFailures.single().error)
+                    assertEquals(status, error.status)
+                    assertEquals(listOf(placeOrigin("b")), result.places.map { it.origin })
+                }
+            }
+        }
+
+        @TestFactory
+        fun `reports a 2xx that is not a usable payload as DECODE`(): List<DynamicTest> = listOf(
+            "upstream error",
+            "",
+            "[]",
+            "null",
+            """{"records": {}}""",
+            """{"tiles": []}""",
+            // kotlinx.serialization refuses this with a SerializationException rather than overflowing the stack.
+            """{"records": [""" + "[".repeat(100_000) + "]".repeat(100_000) + "]}",
+        ).map { body ->
+            dynamicTest(body.ifEmpty { "(empty)" }.take(40)) {
+                runTest {
+                    val bad = tileUrl("a")
+                    val result = client(serverFor(listOf(bad, ok), mapOf(bad to HttpResponse(200, body.toByteArray())))).searchPlaces(region)
+                    assertEquals(listOf(Triple(bad, TileFailure.Kind.DECODE, null)), result.summary())
+                    assertIs<AtgeoDecodingException>(result.tileFailures.single().error)
+                }
+            }
+        }
+
+        @Test
+        fun `reports whatever the transport throws as TRANSPORT, with that error`() = runTest {
+            val server = serverFor(listOf(tileUrl("a"), ok, tileUrl("c")))
+            val thrown = mapOf(tileUrl("a") to IOException("connection reset"), tileUrl("c") to IllegalStateException("a bug in the app's transport"))
+            val transport = HttpTransport { url -> thrown[url]?.let { throw it } ?: server.get(url) }
+            val result = client(transport).searchPlaces(region)
+            assertEquals(
+                listOf(Triple(tileUrl("a"), TileFailure.Kind.TRANSPORT, null), Triple(tileUrl("c"), TileFailure.Kind.TRANSPORT, null)),
+                result.summary(),
+            )
+            assertSame<Throwable?>(thrown[tileUrl("a")], result.tileFailures[0].error)
+            assertSame<Throwable?>(thrown[tileUrl("c")], result.tileFailures[1].error)
+        }
+
+        @Test
+        fun `reports a transport's own timeout as TRANSPORT`() = runTest {
+            val server = serverFor(listOf(tileUrl("a"), ok))
+            val transport = HttpTransport { url -> if (url == tileUrl("a")) withTimeout(10) { awaitCancellation() } else server.get(url) }
+            val result = client(transport).searchPlaces(region)
+            assertEquals(listOf(Triple(tileUrl("a"), TileFailure.Kind.TRANSPORT, null)), result.summary())
+            assertIs<java.net.SocketTimeoutException>(result.tileFailures.single().error)
+        }
+
+        @Test
+        fun `lists failures in URL order, not the order they failed in`() = runTest {
+            val urls = listOf("ftp://tiles.example/0.json", tileUrl("a"), ok, tileUrl("c"), tileUrl("d"), tileUrl("e"))
+            val server = serverFor(
+                urls,
+                mapOf(tileUrl("a") to HttpResponse(502, ByteArray(0)), tileUrl("d") to HttpResponse(200, "nope".toByteArray())),
+            )
+            // The earlier a URL sorts, the later it finishes.
+            val transport = HttpTransport { url ->
+                if ("/xrpc/" !in url) delay(1_000L * (urls.size - urls.indexOf(url)))
+                if (url == tileUrl("c")) throw IOException("reset")
+                server.get(url)
+            }
+            val result = client(transport).searchPlaces(region)
+            assertEquals(
+                listOf(
+                    Triple("ftp://tiles.example/0.json", TileFailure.Kind.REFUSED, null),
+                    Triple(tileUrl("a"), TileFailure.Kind.STATUS, 502),
+                    Triple(tileUrl("c"), TileFailure.Kind.TRANSPORT, null),
+                    Triple(tileUrl("d"), TileFailure.Kind.DECODE, null),
+                    Triple(tileUrl("e"), TileFailure.Kind.STATUS, 404),
+                ),
+                result.summary(),
+            )
+            assertEquals(SearchResult.TileCounts(fetched = 1, failed = 5), result.tiles)
+            assertEquals(result.tiles.failed, result.tileFailures.size)
+            assertEquals(false, result.complete)
+        }
+
+        @Test
+        fun `makes two results with the same failures equal, whatever their errors`() = runTest {
+            var n = 0
+            val server = serverFor(listOf(tileUrl("a"), ok))
+            val transport = HttpTransport { url -> if (url == tileUrl("a")) throw IOException("failure ${++n}") else server.get(url) }
+            val c = client(transport)
+            val first = c.searchPlaces(region)
+            val second = c.searchPlaces(region)
+            assertNotSame(first.tileFailures.single().error, second.tileFailures.single().error)
+            assertEquals(first, second)
+            assertEquals(first.hashCode(), second.hashCode())
+        }
+
+        // A transport may answer its caller's cancellation with an error of its own, as OkHttp does with
+        // IOException("Canceled"). The search still fails with the cancellation, and its workers stop
+        // there instead of counting those as failed tiles and going on to claim the remaining URLs.
+        @Test
+        fun `does not turn the search's cancellation into failed tiles`() = runBlocking {
+            val server = manyTilesServer()
+            val started = CompletableDeferred<Unit>()
+            val inFlight = AtomicInteger()
+            val transport = HttpTransport { url ->
+                if ("/xrpc/" in url) return@HttpTransport server.get(url)
+                if (inFlight.incrementAndGet() == 8) started.complete(Unit)
+                try {
+                    awaitCancellation()
+                } finally {
+                    @Suppress("ThrowFromFinallyBlock")
+                    throw IOException("Canceled")
+                }
+            }
+            val client = AtgeoClient(transport = transport, computeDispatcher = Dispatchers.Default)
+            val search = async(Dispatchers.Default) { client.searchPlaces(region) }
+            withTimeout(5_000) { started.await() }
+            search.cancel()
+            assertIs<CancellationException>(runCatching { search.await() }.exceptionOrNull())
+            assertTrue(search.isCancelled)
+            delay(100)
+            assertEquals(8, inFlight.get())
+        }
+
+        private fun manyTilesServer() = FakeServer(
+            tilesets = listOf(overture((0 until 12).map { i -> FakeTile(tileUrl("t%02d".format(i)), listOf(record(place("p$i", "P$i", listOf(point(37.775, -122.415)))))) })),
+        )
     }
 
     // Contract §4.4: fetch's Request refuses these before any request. Before the check, the default

@@ -23,7 +23,7 @@ for (hit in result.places) {
 }
 ```
 
-`searchPlaces` is a `suspend` function; call it from any coroutine, the main thread included. Misspellings are fine; matching is fuzzy. If `complete` is `false`, some tiles failed to load and the results are partial. If `overview` is `true`, the region was too big to search in full and you got only its most important places.
+`searchPlaces` is a `suspend` function; call it from any coroutine, the main thread included. Misspellings are fine; matching is fuzzy. If `complete` is `false`, some tiles failed to load and the results are partial; `tileFailures` says which and why. If `overview` is `true`, the region was too big to search in full and you got only its most important places.
 
 ## Installation
 
@@ -87,6 +87,14 @@ class SearchResult(
     val complete: Boolean,        // false if any tile failed to load
     val overview: Boolean,        // true if the server answered with its coarse overview
     val tiles: TileCounts,        // fetched and failed
+    val tileFailures: List<TileFailure>, // each failed tile, in tile URL order; empty if complete
+)
+
+class TileFailure(
+    val url: String,              // the tile URL the server listed
+    val kind: Kind,               // REFUSED, STATUS, DECODE or TRANSPORT
+    val status: Int?,             // the HTTP status for STATUS, else null
+    val error: Throwable,         // what was thrown; not part of equals or hashCode
 )
 
 class SearchHit(
@@ -125,7 +133,7 @@ A tileset's collections, attribution and extent. Not cached. The describe types 
 
 - `AtgeoException` has the server's error `code` (`PlaceNotFound`, `BboxTooLarge`, `DatasetNotFound` and so on), or `HttpError` when the server didn't send one, and the HTTP `status`. Use `status` to tell a request the server refused (4xx) from one it failed to answer (5xx); codes are an open list and new ones may appear.
 - `searchPlaces` throws `IllegalArgumentException` for an invalid region or for `SIMILARITY` without text, before any request.
-- A failed `getTiles` fails the search. A failed tile does not: it's skipped, counted in `tiles.failed`, and `complete` is `false`.
+- A failed `getTiles` fails the search. A failed tile does not: it's skipped, counted in `tiles.failed`, listed in `tileFailures`, and `complete` is `false`. Each entry says where the tile failed. `REFUSED`: the server listed a URL that isn't an absolute `http` or `https` URL, or that has a username or password in it, and no request was made. `STATUS`: the tile answered outside 2xx, and `status` and an `AtgeoException` say how. `DECODE`: a 2xx whose body isn't a tile payload. `TRANSPORT`: the transport threw, and `error` is what it threw, so a body over `maxBodyBytes`, a timeout, or a bug in a transport of your own shows up here rather than vanishing into a count. Two results with the same failures are equal whatever their `error`s say. The library logs nothing; what you do with `tileFailures` is up to you, and nothing about a failure is sent anywhere.
 - A 2xx body with nothing usable in it, or that isn't JSON, throws `AtgeoDecodingException`, an `IOException`: as far as your app is concerned the answer didn't arrive. Retrying rarely helps; the server sends the same body again. Network errors come through as whatever the transport throws, usually `IOException`. A transport that gives up by throwing `CancellationException` while your coroutine is still running (its own `withTimeout`, say) is reported as `SocketTimeoutException`, or as `IOException` for anything but a timeout, so that it can't end your coroutine silently.
 - Cancelling the calling coroutine stops the search and throws `CancellationException`.
 

@@ -38,11 +38,15 @@ Before any transport sees a tile URL, the app's included, the client checks that
 
 | Tile URL | Reference (`fetch`) | This port |
 |---|---|---|
-| `https://@h/x`, `https://:@h/x` (empty userinfo) | the userinfo dropped, the URL fetched | a failed tile, as in the Python and Rust ports: any `@` before the host is refused |
+| `https://@h/x`, `https://:@h/x` (empty userinfo, no credentials) | the userinfo dropped, the URL fetched | a failed tile (`REFUSED`), as in the Python and Rust ports and as §4.4 allows: any `@` before the host is refused |
 | `https://h\@x/y` | host `h`, path `/@x/y`, fetched | a failed tile: the `@` is looked for up to the first `/`, `?` or `#`, because `java.net.URL` does not end the authority at a backslash and reads userinfo `h\` at host `x` |
 | `https:h/x`, `https:/h/x`, `https:///h/x` | fetched from host `h`: WHATWG ignores missing or extra slashes after a special scheme | a failed tile: the check wants exactly `://`, as the Rust port's does |
 
 A URL the check accepts can still fail in the transport where WHATWG would have cleaned it up: the default transport does not drop a tab or newline inside a URL, or read a backslash as `/`, so such a tile fails there as a transport error. `java.net.URL` trims the same characters at the ends that WHATWG does. Pinned by `TransportTest`.
+
+## Failed tiles (contract §4.4)
+
+`SearchResult.tileFailures` is the contract's `tileFailures`, and `TileFailure.Kind`'s `REFUSED`, `STATUS`, `DECODE` and `TRANSPORT` are its `refused`, `status`, `decode` and `transport`. `error` is a `MalformedURLException` for `REFUSED`, the `AtgeoException` for `STATUS`, whatever the parser threw (normally an `AtgeoDecodingException`) for `DECODE`, and what the transport threw for `TRANSPORT`, with one exception: a `CancellationException` a transport throws while the search is still active, such as its own `withTimeout`'s, is reported as the `SocketTimeoutException` or `IOException` the client turns it into everywhere else (README, Errors), with the original as its cause. A `StackOverflowError` while decoding a tile is `DECODE` too, as an `AtgeoDecodingException` with the overflow as its cause; no other `Error` is caught, so an `OutOfMemoryError` fails the search. In practice `kotlinx.serialization` refuses deeply nested JSON with a `SerializationException` before its stack can overflow, so a deep body is an ordinary `DECODE`. A tile whose cached body fails to parse again would be `DECODE`; no test can reach that path, since the body parsed once already. Inserting a tile in the cache is outside the guarded part, so an exception there fails the search. The port logs nothing: neither the JVM nor Android has a standard facility that serves both without a dependency.
 
 ## Ordering a NaN distance (contract §8)
 

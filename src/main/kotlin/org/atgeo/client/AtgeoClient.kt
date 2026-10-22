@@ -11,6 +11,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.net.MalformedURLException
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.min
 
@@ -66,6 +67,9 @@ public class AtgeoClient internal constructor(
      * With no `dataset` and no `collection`, searches overturemaps.org / place; with a `dataset`
      * alone, that whole dataset; with a `collection` alone, that collection of overturemaps.org.
      *
+     * A tile that fails to load does not fail the search: the result is marked incomplete, and the
+     * tile is reported in [SearchResult.tileFailures] with its URL and where it failed.
+     *
      * @throws IllegalArgumentException for an invalid region, or [SortMode.SIMILARITY] without text,
      *   before any request is made.
      * @throws AtgeoException when a getTiles call is refused by the server.
@@ -98,8 +102,8 @@ public class AtgeoClient internal constructor(
         val overview = lists.any { it.overview }
 
         // The reference's mapLimit: workers claim URLs in order, at most 8 in flight. Each writes only
-        // its own slots (null for a failed tile), so no counter is shared between threads.
-        val slots = arrayOfNulls<Pair<TileCache.Entry, List<TileRecord>>>(urls.size)
+        // its own slots, so no counter is shared between threads, and failures come out in URL order.
+        val slots = arrayOfNulls<TileOutcome>(urls.size)
         val next = AtomicInteger(0)
         coroutineScope {
             repeat(min(MAX_TILES_IN_FLIGHT, urls.size)) {
@@ -112,16 +116,17 @@ public class AtgeoClient internal constructor(
                 }
             }
         }
-        val fetched = slots.count { it != null }
-        val failed = urls.size - fetched
-        mutex.withLock { parsed.replace(urls.indices.mapNotNull { i -> slots[i]?.let { urls[i] to it } }.toMap()) }
+        val used = urls.indices.mapNotNull { i -> (slots[i] as? TileOutcome.Used)?.let { urls[i] to it } }
+        val tileFailures = slots.mapNotNull { (it as? TileOutcome.Failed)?.failure }
+        mutex.withLock { parsed.replace(used.associate { (url, tile) -> url to (tile.entry to tile.records) }) }
 
         val prefix = collection?.let { "urn:atgeo:$dataset:$it:" }
         // dedupe picks a winner before the region filter runs, as the reference does (contract §4.6).
-        val records = dedupe(slots.flatMap { it?.second.orEmpty() })
+        val records = dedupe(used.flatMap { (_, tile) -> tile.records })
             .filter { prefix == null || it.value["origin"].stringOrNull()?.startsWith(prefix) == true }
             .filter { inRegion(locate(it.value), region) }
-        SearchResult(rank(records, region, query, sort), failed == 0, overview, SearchResult.TileCounts(fetched, failed))
+        val counts = SearchResult.TileCounts(fetched = used.size, failed = tileFailures.size)
+        SearchResult(rank(records, region, query, sort), tileFailures.isEmpty(), overview, counts, tileFailures)
     }
 
     private suspend fun tileList(dataset: String, collection: String?, bbox: String): TileList {
@@ -137,27 +142,63 @@ public class AtgeoClient internal constructor(
         return list
     }
 
-    // The tile's cache entry and records, or null if it failed. Checks the cache when the worker reaches
-    // the URL, as the reference does, so recency is touched in the same order. A cached body parsed once
-    // already, so parsing it again cannot fail. A URL that fetch would refuse fails without a request.
-    private suspend fun loadTile(url: String): Pair<TileCache.Entry, List<TileRecord>>? {
-        if (!isHttpUrl(url)) return null
+    private sealed interface TileOutcome {
+        class Used(val entry: TileCache.Entry, val records: List<TileRecord>) : TileOutcome
+
+        class Failed(val failure: TileFailure) : TileOutcome
+    }
+
+    // The tile's cache entry and records, or how it failed. Checks the cache when the worker reaches the
+    // URL, as the reference does, so recency is touched in the same order.
+    //
+    // What counts as a failed tile is fixed by where an error arises, not its type (contract §4.4): the
+    // URL check, the transport, the status check and decoding are guarded, and each is a kind. The cache
+    // insert is the client's own work and is not, so that a bug there fails the search instead of
+    // passing for a run of bad tiles. Only the search's own cancellation propagates from the guarded
+    // part: a transport's withTimeout throws TimeoutCancellationException, a CancellationException, and
+    // that is a failed tile. An Error is not caught, but for a StackOverflowError while decoding (decodeTile):
+    // an OutOfMemoryError while parsing must not pass for one bad tile.
+    private suspend fun loadTile(url: String): TileOutcome {
+        if (!isHttpUrl(url)) {
+            val error = MalformedURLException("tile URL is not an absolute http or https URL without credentials")
+            return TileOutcome.Failed(TileFailure(url, TileFailure.Kind.REFUSED, null, error))
+        }
         mutex.withLock { tiles.get(url)?.let { it to parsed.get(url, it) } }?.let { (entry, records) ->
-            return entry to (records ?: readTilePayload(parseBody(entry.body)))
+            if (records != null) return TileOutcome.Used(entry, records)
+            // A cached body parsed once already, so a deterministic parser cannot fail on it again.
+            return try {
+                TileOutcome.Used(entry, decodeTile(entry.body))
+            } catch (e: Exception) {
+                currentCoroutineContext().ensureActive()
+                TileOutcome.Failed(TileFailure(url, TileFailure.Kind.DECODE, null, e))
+            }
         }
-        return try {
-            val body = xrpc.get(url)
-            val records = readTilePayload(parseBody(body))
-            val entry = TileCache.Entry(body, records.mapNotNullTo(HashSet()) { recordKey(it) })
-            mutex.withLock { tiles.set(url, entry) }
-            entry to records
+        var kind = TileFailure.Kind.TRANSPORT
+        var status: Int? = null
+        val (body, records) = try {
+            val response = xrpc.send(url)
+            kind = TileFailure.Kind.STATUS
+            status = response.status
+            val body = xrpc.checkStatus(response)
+            kind = TileFailure.Kind.DECODE
+            status = null
+            body to decodeTile(body)
         } catch (e: Exception) {
-            // Only the search's own cancellation propagates. A transport's withTimeout throws
-            // TimeoutCancellationException, a CancellationException, and that is a failed tile.
-            // An Error is not caught: an OutOfMemoryError while parsing must not pass for one bad tile.
             currentCoroutineContext().ensureActive()
-            null
+            return TileOutcome.Failed(TileFailure(url, kind, status, e))
         }
+        val entry = TileCache.Entry(body, records.mapNotNullTo(HashSet()) { recordKey(it) })
+        mutex.withLock { tiles.set(url, entry) }
+        return TileOutcome.Used(entry, records)
+    }
+
+    // The server's input caused a stack overflow in the decoder, so it is a decode failure (contract §4.4);
+    // only that Error, never Error in general. kotlinx.serialization refuses deep nesting with a
+    // SerializationException before it can overflow, so this is a guard for later versions.
+    private fun decodeTile(body: ByteArray): List<TileRecord> = try {
+        readTilePayload(parseBody(body))
+    } catch (e: StackOverflowError) {
+        throw AtgeoDecodingException("tile payload is too deeply nested", e)
     }
 
     /**

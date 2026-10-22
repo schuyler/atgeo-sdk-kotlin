@@ -180,16 +180,21 @@ internal class Xrpc(server: String, private val transport: HttpTransport) {
         parseBody(get(url(nsid, params)))
 
     /** The body of a 2xx answer to a GET of `url` exactly as given; AtgeoException otherwise. */
-    suspend fun get(url: String): ByteArray {
-        val response = try {
-            transport.get(url)
-        } catch (e: CancellationException) {
-            // The caller's own cancellation propagates. Anything else is the transport giving up, such
-            // as its withTimeout, and is a network failure (contract §14): left as a
-            // CancellationException it would end the caller's coroutine silently.
-            currentCoroutineContext().ensureActive()
-            throw if (e is TimeoutCancellationException) SocketTimeoutException(e.message).apply { initCause(e) } else IOException(e.message, e)
-        }
+    suspend fun get(url: String): ByteArray = checkStatus(send(url))
+
+    /** The transport's answer to a GET of `url` exactly as given, of any status. */
+    suspend fun send(url: String): HttpResponse = try {
+        transport.get(url)
+    } catch (e: CancellationException) {
+        // The caller's own cancellation propagates. Anything else is the transport giving up, such
+        // as its withTimeout, and is a network failure (contract §14): left as a
+        // CancellationException it would end the caller's coroutine silently.
+        currentCoroutineContext().ensureActive()
+        throw if (e is TimeoutCancellationException) SocketTimeoutException(e.message).apply { initCause(e) } else IOException(e.message, e)
+    }
+
+    /** The body of a 2xx response; AtgeoException otherwise. */
+    fun checkStatus(response: HttpResponse): ByteArray {
         if (response.status !in 200..299) throw atgeoException(response.status, response.body)
         return response.body
     }
