@@ -3,6 +3,7 @@ package org.atgeo.sample
 import android.app.Activity
 import android.os.Bundle
 import android.widget.TextView
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
@@ -30,6 +31,8 @@ class MainActivity : Activity() {
                     val name = (hit.place["name"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: "(unnamed)"
                     "%s, %.0f m, score %.2f".format(name, hit.distance, hit.score ?: 0.0)
                 }.ifEmpty { "Nothing found." }
+            } catch (e: CancellationException) {
+                throw e // the activity is gone; there is no view to update
             } catch (e: Exception) {
                 "Search failed: $e"
             }

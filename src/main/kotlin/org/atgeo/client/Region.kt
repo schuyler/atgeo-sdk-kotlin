@@ -14,10 +14,13 @@ import kotlin.math.sqrt
 
 /** Where to search. Neither class validates on construction; [AtgeoClient.searchPlaces] does (contract §3). */
 public sealed interface Region {
-    /** A circle; `radius` in metres. */
+    /** A circle; `radius` in metres. Latitude first, unlike [Bbox]: name the arguments. */
     public data class Circle(val lat: Double, val lon: Double, val radius: Double) : Region
 
-    /** A box in degrees. `minLon > maxLon` crosses the antimeridian. */
+    /**
+     * A box in degrees, longitude first (GeoJSON's order), unlike [Circle]: name the arguments, since
+     * validation cannot catch most swaps. `minLon > maxLon` crosses the antimeridian.
+     */
     public data class Bbox(val minLon: Double, val minLat: Double, val maxLon: Double, val maxLat: Double) : Region
 }
 

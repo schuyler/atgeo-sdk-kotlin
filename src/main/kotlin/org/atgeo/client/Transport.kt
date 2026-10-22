@@ -39,7 +39,8 @@ public class AtgeoException(public val code: String, message: String) : RuntimeE
 
 /**
  * The default transport: `java.net.HttpURLConnection`, on every JVM and Android version with no
- * dependency. Cancelling the caller returns at once; on the JDK the socket may keep reading a body
+ * dependency. It asks for gzip and decodes it, which the JDK does not do on its own. Cancelling the
+ * caller returns at once; on the JDK the socket may keep reading a body
  * already in progress until it ends or `readTimeoutMillis` passes, because `disconnect()` does not
  * interrupt that read. Apps that cancel often should supply a transport that tears requests down on
  * the wire, such as OkHttp's (android-sample/ has one).
