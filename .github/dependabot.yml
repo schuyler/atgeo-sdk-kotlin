@@ -1,0 +1,19 @@
+version: 2
+updates:
+  # gradle/libs.versions.toml (which android-sample/ shares) and the Gradle wrapper.
+  - package-ecosystem: gradle
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+    ignore:
+      # JUnit 6 needs Java 17 at runtime and does not pair with kotlin-test-junit5.
+      - dependency-name: "org.junit:junit-bom"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
