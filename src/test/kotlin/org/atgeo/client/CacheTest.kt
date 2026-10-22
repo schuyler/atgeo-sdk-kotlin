@@ -277,5 +277,20 @@ class CacheTest {
             assertEquals("v2", cache.get("k"))
             assertNull(cache.get("other"))
         }
+
+        @Test
+        fun `drops expired entries when another is set`() {
+            var now = 0L
+            val cache = TtlCache<String>(3_600_000) { now }
+            cache.set("a", "1")
+            now = 1_000_000
+            cache.set("b", "2")
+            now = 3_600_000
+            cache.set("c", "3")
+            assertEquals(2, cache.size)
+            assertNull(cache.get("a"))
+            assertEquals("2", cache.get("b"))
+            assertEquals("3", cache.get("c"))
+        }
     }
 }
