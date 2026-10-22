@@ -9,6 +9,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.util.concurrent.atomic.AtomicReference
+import java.util.zip.GZIPInputStream
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -63,11 +64,17 @@ public class HttpUrlConnectionTransport(
                 connection.readTimeout = readTimeoutMillis
                 connection.useCaches = false
                 connection.setRequestProperty("Accept", "application/json")
+                // The JDK never asks for gzip, and tiles are about 10x smaller with it. Asking
+                // explicitly turns off Android's transparent decoding, so decode here on both.
+                connection.setRequestProperty("Accept-Encoding", "gzip")
                 // responseCode selects the stream: getInputStream() throws on a 404, and errorStream
                 // is null for an empty error body.
                 val status = connection.responseCode
                 val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-                val body = stream?.use { it.readBytes() } ?: ByteArray(0)
+                val raw = stream?.use { it.readBytes() } ?: ByteArray(0)
+                // An empty body has no gzip header to read, whatever Content-Encoding says.
+                val gzipped = connection.contentEncoding.equals("gzip", ignoreCase = true) && raw.isNotEmpty()
+                val body = if (gzipped) GZIPInputStream(raw.inputStream()).use { it.readBytes() } else raw
                 cont.resume(HttpResponse(status, body))
             } catch (t: Throwable) {
                 cont.resumeWithException(t)
