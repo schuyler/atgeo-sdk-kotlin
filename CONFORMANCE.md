@@ -21,4 +21,8 @@ Coordinates that arrive as strings are parsed with Kotlin's `String.toDoubleOrNu
 
 `kotlinx.serialization`'s `Json.parseToJsonElement` accepts an unquoted literal such as `1.5f` or `yes` as a non-string primitive, where `JSON.parse` rejects the whole body. A body the reference refuses can therefore parse here.
 
+## Ordering a NaN distance (contract §8)
+
+The reference orders by subtracting (`a.distance - b.distance`), so a NaN distance compares as a tie with everything, which makes the comparator inconsistent and the resulting order engine-defined. Only out-of-range coordinates in place data (a latitude past ±90) can produce one. This port compares instead of subtracting, ties `-0` with `0` exactly as subtraction does, and sorts a NaN after every number, because Java's sort may throw on an inconsistent comparator.
+
 <!-- Phase 0 stub: each row above gets a test that pins it when the readers land. -->
