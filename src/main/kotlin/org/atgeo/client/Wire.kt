@@ -17,8 +17,11 @@ import kotlin.math.abs
 // (which throws on an object or array), and its kind is checked before it is
 // read: longOrNull and doubleOrNull parse string content, so "5" would read as 5.
 
-/** The string a JSON string holds; null for anything else. */
-internal fun JsonElement?.stringOrNull(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.content
+/**
+ * The string a JSON string holds; null for anything else, a number included. Reads a field of a place
+ * without a cast: `hit.place["name"].stringOrNull()`. (kotlinx's `contentOrNull` would turn 5 into "5".)
+ */
+public fun JsonElement?.stringOrNull(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.content
 
 /** The value of a JSON number; null for a string, boolean, null, object or array. */
 internal fun JsonElement?.numberOrNull(): Double? = (this as? JsonPrimitive)?.takeUnless { it.isString }?.doubleOrNull

@@ -9,7 +9,6 @@ It's a port of [@atgeo/client](https://github.com/schuyler/atgeo-sdk-js) and ret
 ```kotlin
 import org.atgeo.client.AtgeoClient
 import org.atgeo.client.Region
-import kotlinx.serialization.json.JsonPrimitive
 
 val atgeo = AtgeoClient()
 
@@ -19,8 +18,8 @@ val result = atgeo.searchPlaces(
 )
 
 for (hit in result.places) {
-    val name = (hit.place["name"] as? JsonPrimitive)?.takeIf { it.isString }?.content
-    println("$name  ${hit.distance.toInt()} m  ${"%.2f".format(hit.score)}  ${hit.origin}")
+    val point = hit.location.point
+    println("${hit.name}  ${point?.lat},${point?.lon}  ${hit.distance.toInt()} m  ${"%.2f".format(hit.score)}  ${hit.origin}")
 }
 ```
 
@@ -96,8 +95,13 @@ data class SearchHit(
     val importance: Long?,        // relative to its tileset; null if it has none
     val distance: Double,         // metres from the region's centre to the nearest point of the place; 0 if it contains the centre
     val score: Double?,           // 0 to 1 text similarity; null without text
-)
+) {
+    val name: String?             // place["name"] if it's a string
+    val location: PlaceLocation   // point and/or box, parsed as the client parsed them for distance
+}
 ```
+
+`place` is the gazetteer's record untouched. `name` and `location` save you the two reads every app needs: `location.point` is the first usable `geo` entry of `place.locations`, `location.bbox` the first usable `bbox` entry (`west > east` crosses the antimeridian), coordinates already parsed from the strings they arrive as. For any other field, `place["field"].stringOrNull()` gives a string field or `null`, without the casts `JsonElement` otherwise needs. `PlaceRecord` has the same `name` and `location`.
 
 `FUSED` orders by similarity, breaking near-ties by importance, then distance. `DISTANCE` orders nearest first, then the smaller place, then importance, then similarity. `SIMILARITY` orders by similarity, then distance, and needs `text`. Scores are compared to three decimals and remaining ties break on `origin`, so the order is deterministic.
 

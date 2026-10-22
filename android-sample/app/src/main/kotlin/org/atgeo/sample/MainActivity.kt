@@ -8,7 +8,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.JsonPrimitive
 import org.atgeo.client.AtgeoClient
 import org.atgeo.client.Region
 
@@ -28,7 +27,7 @@ class MainActivity : Activity() {
             view.text = try {
                 val result = atgeo.searchPlaces(Region.Circle(43.0, -71.45, 3000.0), text = "pizza")
                 result.places.take(20).joinToString("\n") { hit ->
-                    val name = (hit.place["name"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: "(unnamed)"
+                    val name = hit.name ?: "(unnamed)"
                     "%s, %.0f m, score %.2f".format(name, hit.distance, hit.score ?: 0.0)
                 }.ifEmpty { "Nothing found." }
             } catch (e: CancellationException) {
