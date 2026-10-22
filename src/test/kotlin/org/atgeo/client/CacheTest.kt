@@ -1,20 +1,190 @@
 package org.atgeo.client
 
+import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFails
 import kotlin.test.assertNull
 import kotlin.test.assertSame
+import kotlin.test.assertTrue
 
 private fun entry(size: Long, vararg origins: String) = TileCache.Entry(
     origins.map { TileRecord(JsonObject(mapOf("origin" to JsonPrimitive(it), "name" to JsonPrimitive("$it@$size")))) },
     size,
 )
 
+private val region = Region.Bbox(-122.42, 37.77, -122.41, 37.78)
+private const val OTHER_ORIGIN = "urn:atgeo:example.org:thing:shared"
+
+private fun setup() = FakeServer(
+    tilesets = listOf(
+        overture(
+            listOf(
+                FakeTile(
+                    tileUrl("a"),
+                    listOf(
+                        record(place("a", "Alpha", listOf(point(37.772, -122.412))), 3),
+                        record(place("shared", "Shared in A", listOf(point(37.773, -122.413))), 2),
+                    ),
+                ),
+            ),
+        ),
+        FakeTileset(
+            slug = "example-thing",
+            collections = listOf(collectionOf("example.org", "thing")),
+            tiles = listOf(
+                FakeTile(
+                    tileUrl("o"),
+                    listOf(record(place("shared", "Shared in other", listOf(point(10.0, 10.0)), mapOf("origin" to JsonPrimitive(OTHER_ORIGIN))))),
+                ),
+            ),
+        ),
+    ),
+)
+
+private fun tileListCount(requests: List<String>) = requests.count { "org.atgeo.getTiles" in it }
+
+// The reference fakes Date; the TTL caches here take the internal constructor's clock (spec §5).
+private const val MIDNIGHT = 1_767_225_600_000L // 2026-01-01T00:00:00Z
+
 class CacheTest {
+    @Nested
+    @DisplayName("warm regions")
+    inner class WarmRegions {
+        @Test
+        fun `answers an identical second search offline`() = runTest {
+            val fake = setup()
+            val client = client(fake)
+            val first = client.searchPlaces(region, text = "Alpha")
+            fake.goOffline()
+            val second = client.searchPlaces(region, text = "Alpha")
+            assertEquals(first, second)
+            assertTrue(first.places.isNotEmpty())
+        }
+
+        @Test
+        fun `reuses tiles for a different text over the same region`() = runTest {
+            val fake = setup()
+            val client = client(fake)
+            client.searchPlaces(region)
+            val before = fake.requests.size
+            client.searchPlaces(region, text = "Alpha")
+            assertEquals(before, fake.requests.size)
+        }
+
+        @Test
+        fun `makes no tile request for a repeated search`() = runTest {
+            val fake = setup()
+            val client = client(fake)
+            client.searchPlaces(region)
+            client.searchPlaces(region)
+            assertEquals(1, fake.requests.count { it == tileUrl("a") })
+        }
+    }
+
+    @Nested
+    @DisplayName("tile-list expiry")
+    inner class TileListExpiry {
+        @Test
+        fun `expires after 3600 s and then requires network`() = runTest {
+            var now = MIDNIGHT
+            val fake = setup()
+            val client = client(fake, clock = { now })
+            client.searchPlaces(region)
+            val base = fake.requests.size
+
+            now = MIDNIGHT + 3_599_000 // 00:59:59
+            client.searchPlaces(region)
+            assertEquals(base, fake.requests.size)
+
+            now = MIDNIGHT + 3_601_000 // 01:00:01
+            client.searchPlaces(region)
+            assertEquals(2, tileListCount(fake.requests))
+            assertEquals(1, fake.requests.count { it == tileUrl("a") })
+        }
+
+        @Test
+        fun `fails offline once the tile list has expired`() = runTest {
+            var now = MIDNIGHT
+            val fake = setup()
+            val client = client(fake, clock = { now })
+            client.searchPlaces(region)
+            fake.goOffline()
+            now = MIDNIGHT + 3_601_000
+            assertFails { client.searchPlaces(region) }
+        }
+
+        @Test
+        fun `caches describeService for 3600 s`() = runTest {
+            var now = MIDNIGHT
+            val fake = setup()
+            val client = client(fake, clock = { now })
+            client.describeService()
+            now = MIDNIGHT + 3_599_000
+            client.describeService()
+            assertEquals(1, fake.requests.size)
+            now = MIDNIGHT + 3_601_000
+            client.describeService()
+            assertEquals(2, fake.requests.size)
+        }
+    }
+
+    @Nested
+    @DisplayName("getPlace cache scan")
+    inner class GetPlaceCacheScan {
+        @Test
+        fun `answers from an already-fetched tile without a request`() = runTest {
+            val fake = setup()
+            val client = client(fake)
+            client.searchPlaces(region)
+            val before = fake.requests.size
+            val found = client.getPlace(placeOrigin("a"))
+            assertEquals(before, fake.requests.size)
+            assertEquals(PlaceRecord(placeOrigin("a"), place("a", "Alpha", listOf(point(37.772, -122.412))), 3), found)
+        }
+
+        @Test
+        fun `answers offline for a cached origin`() = runTest {
+            val fake = setup()
+            val client = client(fake)
+            client.searchPlaces(region)
+            fake.goOffline()
+            assertEquals("Shared in A", client.getPlace(placeOrigin("shared")).place["name"].stringOrNull())
+        }
+
+        @Test
+        fun `matches the whole origin, not a shared id`() = runTest {
+            val fake = setup()
+            val client = client(fake)
+            client.searchPlaces(region)
+            val before = fake.requests.size
+            val found = client.getPlace(OTHER_ORIGIN)
+            val getPlaces = fake.requests.drop(before).filter { endpointOf(it).endsWith("/xrpc/org.atgeo.getPlace") }
+            assertEquals(1, getPlaces.size)
+            assertEquals(OTHER_ORIGIN, paramsOf(getPlaces[0])["uri"])
+            assertEquals("Shared in other", found.place["name"].stringOrNull())
+        }
+
+        @Test
+        fun `returns the copy from the lowest tile URL, although a higher one was cached first`() = runTest {
+            fun copy(name: String) = record(place("x", name, listOf(point(37.775, -122.415))))
+            val fake = FakeServer(
+                tilesets = listOf(overture(listOf(FakeTile(tileUrl("a"), listOf(copy("Copy A"))), FakeTile(tileUrl("b"), listOf(copy("Copy B")))))),
+                tilesFor = { bbox -> TilesAnswer.Urls(listOf(if (bbox.startsWith("-122")) tileUrl("a") else tileUrl("b"))) },
+            )
+            val client = client(fake)
+            client.searchPlaces(Region.Bbox(-100.5, 10.5, -100.4, 10.6))
+            assertEquals("Copy B", client.getPlace(placeOrigin("x")).place["name"].stringOrNull())
+            client.searchPlaces(region)
+            fake.goOffline()
+            assertEquals("Copy A", client.getPlace(placeOrigin("x")).place["name"].stringOrNull())
+        }
+    }
+
     // The reference suite reaches the caches only through the client; these pin contract §10 directly.
     @Nested
     @DisplayName("TileCache (no reference counterpart)")

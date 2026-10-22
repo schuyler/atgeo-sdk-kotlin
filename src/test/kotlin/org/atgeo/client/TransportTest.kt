@@ -2,6 +2,7 @@ package org.atgeo.client
 
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.SerializationException
+import java.io.IOException
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.DynamicTest
 import org.junit.jupiter.api.DynamicTest.dynamicTest
@@ -12,7 +13,152 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 
+private val region = Region.Bbox(-122.42, 37.77, -122.41, 37.78)
+
+private fun twoTiles(failTiles: Set<String> = emptySet()) = FakeServer(
+    failTiles = failTiles,
+    tilesets = listOf(
+        overture(
+            listOf(
+                FakeTile(tileUrl("a"), listOf(record(place("a", "A", listOf(point(37.772, -122.412)))))),
+                FakeTile(tileUrl("b"), listOf(record(place("b", "B", listOf(point(37.774, -122.414)))))),
+            ),
+        ),
+    ),
+)
+
 class TransportTest {
+    @Nested
+    @DisplayName("failed tiles")
+    inner class FailedTiles {
+        @Test
+        fun `reports a complete search`() = runTest {
+            val result = client(twoTiles()).searchPlaces(region)
+            assertEquals(true, result.complete)
+            assertEquals(SearchResult.TileCounts(fetched = 2, failed = 0), result.tiles)
+        }
+
+        @Test
+        fun `returns surviving results, marked incomplete, when a tile answers non-200`() = runTest {
+            val result = client(twoTiles(setOf(tileUrl("b")))).searchPlaces(region)
+            assertEquals(false, result.complete)
+            assertEquals(SearchResult.TileCounts(fetched = 1, failed = 1), result.tiles)
+            assertEquals(listOf(placeOrigin("a")), result.places.map { it.origin })
+        }
+
+        @Test
+        fun `returns an incomplete result when a tile fetch rejects`() = runTest {
+            val server = twoTiles()
+            val flaky = HttpTransport { url -> if (url == tileUrl("a")) throw IOException("boom") else server.get(url) }
+            val result = client(flaky).searchPlaces(region)
+            assertEquals(false, result.complete)
+            assertEquals(SearchResult.TileCounts(fetched = 1, failed = 1), result.tiles)
+            assertEquals(listOf(placeOrigin("b")), result.places.map { it.origin })
+        }
+
+        @Test
+        fun `does not retry a failed tile`() = runTest {
+            val server = twoTiles(setOf(tileUrl("b")))
+            client(server).searchPlaces(region)
+            assertEquals(1, server.requests.count { it == tileUrl("b") })
+        }
+
+        @Test
+        fun `reports every tile failed without throwing`() = runTest {
+            val result = client(twoTiles(setOf(tileUrl("a"), tileUrl("b")))).searchPlaces(region)
+            assertEquals(emptyList(), result.places)
+            assertEquals(false, result.complete)
+            assertEquals(SearchResult.TileCounts(fetched = 0, failed = 2), result.tiles)
+        }
+    }
+
+    @Nested
+    @DisplayName("typed server errors")
+    inner class TypedServerErrors {
+        @Test
+        fun `surfaces BboxTooLarge from getTiles`() = runTest {
+            val server = FakeServer(tilesFor = { TilesAnswer.Error("BboxTooLarge", "bbox too large") })
+            val error = assertFailsWith<AtgeoException> { client(server).searchPlaces(region) }
+            assertEquals("BboxTooLarge", error.code)
+        }
+
+        @Test
+        fun `surfaces CollectionNotFound from getTiles`() = runTest {
+            val error = assertFailsWith<AtgeoException> { client(FakeServer()).searchPlaces(region, collection = "nope") }
+            assertEquals("CollectionNotFound", error.code)
+        }
+
+        @Test
+        fun `surfaces DatasetNotFound from getTiles`() = runTest {
+            val error = assertFailsWith<AtgeoException> { client(FakeServer()).searchPlaces(region, dataset = "example.org") }
+            assertEquals("DatasetNotFound", error.code)
+        }
+
+        @TestFactory
+        fun `throws when an antimeridian half is BboxTooLarge`(): List<DynamicTest> =
+            listOf("first" to "170", "second" to "-180").map { (half, prefix) ->
+                dynamicTest("throws when the $half antimeridian half is BboxTooLarge") {
+                    runTest {
+                        val server = FakeServer(
+                            tilesets = listOf(overture(listOf(FakeTile(tileUrl("a"), listOf(record(place("a", "A", listOf(point(15.0, 175.0))))))))),
+                            tilesFor = { bbox ->
+                                if (bbox.startsWith(prefix)) TilesAnswer.Error("BboxTooLarge", "too large") else TilesAnswer.Urls(listOf(tileUrl("a")))
+                            },
+                        )
+                        val error = assertFailsWith<AtgeoException> { client(server).searchPlaces(Region.Bbox(170.0, 10.0, -170.0, 20.0)) }
+                        assertEquals("BboxTooLarge", error.code)
+                    }
+                }
+            }
+
+        @Test
+        fun `does not subdivide after BboxTooLarge`() = runTest {
+            val server = FakeServer(tilesFor = { TilesAnswer.Error("BboxTooLarge", "too large") })
+            runCatching { client(server).searchPlaces(region) }
+            assertEquals(1, server.requests.size)
+        }
+    }
+
+    @Nested
+    @DisplayName("XRPC URLs")
+    inner class XrpcUrls {
+        @Test
+        @DisplayName("defaults to places.atgeo.org")
+        fun defaultsToPlacesAtgeoOrg() = runTest {
+            val server = twoTiles()
+            client(server).searchPlaces(region)
+            val u = server.requests[0]
+            assertEquals("$DEFAULT_SERVER/xrpc/org.atgeo.getTiles", endpointOf(u))
+            assertEquals("overturemaps.org", paramsOf(u)["dataset"])
+            assertEquals("place", paramsOf(u)["collection"])
+            assertEquals("-122.42,37.77,-122.41,37.78", paramsOf(u)["bbox"])
+        }
+
+        @Test
+        fun `targets a custom server for every XRPC call`() = runTest {
+            val base = "http://localhost:8000"
+            val server = FakeServer(
+                server = base,
+                tilesets = listOf(overture(listOf(FakeTile("$base/tiles/a.json", listOf(record(place("a", "A", listOf(point(37.772, -122.412))))))))),
+            )
+            val client = client(server, server = base)
+            client.searchPlaces(region)
+            client.describeService()
+            client.describeTileset("overture-place")
+            runCatching { client.getPlace(placeOrigin("zzz")) }
+            assertEquals(
+                listOf(
+                    "$base/xrpc/org.atgeo.getTiles",
+                    "$base/xrpc/org.atgeo.describeService",
+                    "$base/xrpc/org.atgeo.describeTileset",
+                    "$base/xrpc/org.atgeo.getPlace",
+                ),
+                server.requests.filter { "/xrpc/" in it }.map(::endpointOf),
+            )
+            assert("$base/tiles/a.json" in server.requests)
+        }
+    }
+
     @Nested
     @DisplayName("XRPC layer (no reference counterpart)")
     inner class XrpcLayer {

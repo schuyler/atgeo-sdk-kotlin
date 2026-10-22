@@ -3,10 +3,18 @@ package org.atgeo.client
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
 import org.junit.jupiter.api.DisplayName
+import org.junit.jupiter.api.DynamicTest
+import org.junit.jupiter.api.DynamicTest.dynamicTest
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.TestFactory
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 private val here = point(0.0, 0.0)
 private val near = Region.Circle(0.0, 0.0, 10.0)
@@ -16,7 +24,50 @@ private fun tileRecord(origin: String?, name: String = "Same", importance: Long?
 
 private fun nameOf(hit: SearchHit) = (hit.place["name"] as JsonPrimitive).content
 
+// The fixture's region is {lat, lon, radius} or {bbox: [minLon, minLat, maxLon, maxLat]}.
+private fun regionOf(o: JsonObject): Region {
+    val bbox = o["bbox"] as? JsonArray
+    if (bbox != null) {
+        val (a, b, c, d) = bbox.map { it.jsonPrimitive.content.toDouble() }
+        return Region.Bbox(a, b, c, d)
+    }
+    return Region.Circle(o.getValue("lat").jsonPrimitive.content.toDouble(), o.getValue("lon").jsonPrimitive.content.toDouble(), o.getValue("radius").jsonPrimitive.content.toDouble())
+}
+
 class RankingTest {
+    // Through the client and the fake with one tile, as ranking.test.ts does, so the fixture's
+    // values travel untouched.
+    @Nested
+    @DisplayName("ranking scenarios")
+    inner class RankingScenarios {
+        @TestFactory
+        fun scenarios(): List<DynamicTest> = (fixture("ranking-scenarios.json") as JsonArray).map { element ->
+            val s = element as JsonObject
+            dynamicTest(s.getValue("name").stringOrNull()) {
+                runTest {
+                    val records = (s.getValue("records") as JsonArray).map {
+                        val r = it as JsonObject
+                        record(r.getValue("value") as JsonObject, r["importance"]?.jsonPrimitive?.long)
+                    }
+                    val server = FakeServer(tilesets = listOf(overture(listOf(FakeTile("https://places.atgeo.org/tiles/t0.json", records)))))
+                    val sort = s["sort"].stringOrNull()?.let { SortMode.valueOf(it.uppercase()) } ?: SortMode.FUSED
+                    val places = client(server).searchPlaces(regionOf(s.getValue("region") as JsonObject), text = s["text"].stringOrNull(), sort = sort).places
+                    val origins = places.map { it.origin }
+                    val expect = s.getValue("expect") as JsonObject
+                    val top = expect.getValue("top") as JsonArray
+                    for (t in top) {
+                        val k = (t as JsonObject).getValue("k").jsonPrimitive.content.toInt()
+                        for (o in t.getValue("origins") as JsonArray) {
+                            assertTrue(o.stringOrNull() in origins.take(k), "${o.stringOrNull()} not in the top $k: $origins")
+                        }
+                    }
+                    for (o in (expect["absent"] as? JsonArray).orEmpty()) assertFalse(o.stringOrNull() in origins, "${o.stringOrNull()} present")
+                    if (top.isEmpty()) assertEquals(emptyList(), origins)
+                }
+            }
+        }
+    }
+
     // Contract §7's scoring examples; exact values from the reference.
     @Nested
     @DisplayName("scoring (no reference counterpart)")
