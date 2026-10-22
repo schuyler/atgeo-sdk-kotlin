@@ -14,11 +14,13 @@ public enum class SortMode { FUSED, DISTANCE, SIMILARITY }
 
 public class SearchResult internal constructor(
     public val places: List<SearchHit>,
-    /** False if any tile failed to load, so the results are partial. */
+    /** False if any tile failed to load, so the results are partial; [tileFailures] says which and why. */
     public val complete: Boolean,
     /** True if the server answered with only the region's most important places. */
     public val overview: Boolean,
     public val tiles: TileCounts,
+    /** Each tile that failed, in the order of the tile URLs, not the order they failed in. Empty when [complete]. */
+    public val tileFailures: List<TileFailure>,
 ) {
     public class TileCounts internal constructor(public val fetched: Int, public val failed: Int) {
         override fun equals(other: Any?): Boolean = other is TileCounts && fetched == other.fetched && failed == other.failed
@@ -26,10 +28,52 @@ public class SearchResult internal constructor(
         override fun toString(): String = "TileCounts(fetched=$fetched, failed=$failed)"
     }
 
-    override fun equals(other: Any?): Boolean = other is SearchResult &&
-        places == other.places && complete == other.complete && overview == other.overview && tiles == other.tiles
-    override fun hashCode(): Int = Objects.hash(places, complete, overview, tiles)
-    override fun toString(): String = "SearchResult(places=$places, complete=$complete, overview=$overview, tiles=$tiles)"
+    override fun equals(other: Any?): Boolean = other is SearchResult && places == other.places &&
+        complete == other.complete && overview == other.overview && tiles == other.tiles && tileFailures == other.tileFailures
+    override fun hashCode(): Int = Objects.hash(places, complete, overview, tiles, tileFailures)
+    override fun toString(): String =
+        "SearchResult(places=$places, complete=$complete, overview=$overview, tiles=$tiles, tileFailures=$tileFailures)"
+}
+
+/**
+ * A tile a search could not use (contract §4.4). [url], [kind] and [status] are the same in every
+ * atgeo SDK; [error] is this platform's, so it is left out of [equals] and [hashCode]. Nothing in it
+ * comes from the search text or the region.
+ */
+public class TileFailure internal constructor(
+    /** The tile URL as the server's tile list gave it. */
+    public val url: String,
+    public val kind: Kind,
+    /** The HTTP status for [Kind.STATUS]; null for every other kind. */
+    public val status: Int?,
+    /**
+     * What failed: an [AtgeoException] for [Kind.STATUS]; for [Kind.DECODE] usually an
+     * [AtgeoDecodingException]; for [Kind.TRANSPORT] whatever the transport threw; for [Kind.REFUSED]
+     * a `MalformedURLException`.
+     */
+    public val error: Throwable,
+) {
+    /** Where the tile failed. */
+    public enum class Kind {
+        /** The URL is not an absolute `http` or `https` URL, or carries credentials. No request was made. */
+        REFUSED,
+
+        /** The server answered with a status outside 2xx. */
+        STATUS,
+
+        /** A 2xx whose body is not a usable tile payload: not JSON, or no `records` array. */
+        DECODE,
+
+        /**
+         * The transport threw: a network failure, a timeout, a body over `maxBodyBytes`, or anything a
+         * transport of the app's own throws.
+         */
+        TRANSPORT,
+    }
+
+    override fun equals(other: Any?): Boolean = other is TileFailure && url == other.url && kind == other.kind && status == other.status
+    override fun hashCode(): Int = Objects.hash(url, kind, status)
+    override fun toString(): String = "TileFailure(url=$url, kind=$kind, status=$status, error=$error)"
 }
 
 public class SearchHit internal constructor(

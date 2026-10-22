@@ -32,6 +32,25 @@ Normalization lowercases with `String.lowercase()`, which is `toLowerCase(Locale
 
 Step 3's second lowercase carries the same difference to the mathematical capital sigmas (U+1D6BA `𝚺` and its four other styles), which NFKD turns into Σ. Ordinary words, the abbreviations in the fixture and `𝚺𝚨𝚺` agree. A name would have to put a capital sigma next to a digit or a combining mark to tell the two apart, and then they differ by one letter, σ against ς, which moves that name's similarity score slightly.
 
+## Refused tile URLs (contract §4.4)
+
+Before any transport sees a tile URL, the app's included, the client checks that it is an absolute `http` or `https` URL with a host and no credentials, as the Fetch standard's `Request` does in the reference; a URL that is not is a failed tile and no request is made. The check reads the URL as WHATWG URL parsing would where that is cheap: leading and trailing spaces and C0 controls are ignored, tab, LF and CR are ignored anywhere, the scheme is matched without regard to ASCII case, and the authority ends at `/`, `\`, `?` or `#`. The URL the transport gets is the one the tile list gave, unchanged. Where the check and `fetch` differ:
+
+| Tile URL | Reference (`fetch`) | This port |
+|---|---|---|
+| `https://@h/x`, `https://:@h/x` (empty userinfo, no credentials) | the userinfo dropped, the URL fetched | a failed tile (`REFUSED`), as in the Python and Rust ports and as §4.4 allows: any `@` before the host is refused |
+| `https://h\@x/y` | host `h`, path `/@x/y`, fetched | a failed tile: the `@` is looked for up to the first `/`, `?` or `#`, because `java.net.URL` does not end the authority at a backslash and reads userinfo `h\` at host `x` |
+| `https:h/x`, `https:/h/x`, `https:///h/x`, and backslash forms such as `https:\\h/x`, `https:/\h/x`, `https:\/h/x`, `https://\h/x` and other mixes of `/` and `\` | fetched from host `h`: WHATWG reads `\` as `/` and ignores missing or extra slashes after a special scheme | a failed tile: the check wants exactly `://`, as the Rust port's does, and an authority that starts with `\` has no host |
+| `https://h%41/x` | host `ha` once percent-decoded, fetched | a failed tile: `%` is refused in a host along with WHATWG's other forbidden host code points |
+
+The check also refuses what WHATWG's parser rejects and `java.net.URL` might not: a port that is not ASCII digits or is above 65535 (`java.net.URL` would fetch `http://127.0.0.1:+80/x`), a host with a forbidden host code point (a space, a control character, `<`, `>`, `^`, `|`, `[`, `]` and the like), and a bracketed IPv6 host that is unclosed, holds anything but hex digits, `:` and `.`, or is followed by anything but a port. Other URLs WHATWG would reject, such as an IPv4 address out of range (`http://1.2.3.256/x`), pass the check and are left to the transport; with the default transport they fail there, as `TRANSPORT`.
+
+A URL the check accepts can still fail in the transport where WHATWG would have cleaned it up: the default transport does not drop a tab or newline inside a URL, or read a backslash as `/`, so such a tile fails there as a transport error. `java.net.URL` trims the same characters at the ends that WHATWG does. Pinned by `TransportTest`.
+
+## Failed tiles (contract §4.4)
+
+`SearchResult.tileFailures` is the contract's `tileFailures`, and `TileFailure.Kind`'s `REFUSED`, `STATUS`, `DECODE` and `TRANSPORT` are its `refused`, `status`, `decode` and `transport`. `error` is a `MalformedURLException` for `REFUSED`, the `AtgeoException` for `STATUS`, whatever the parser threw (normally an `AtgeoDecodingException`) for `DECODE`, and what the transport threw for `TRANSPORT`, with one exception: a `CancellationException` a transport throws while the search is still active, such as its own `withTimeout`'s, is reported as the `SocketTimeoutException` or `IOException` the client turns it into everywhere else (README, Errors), with the original as its cause. A `StackOverflowError` while decoding a tile is `DECODE` too, as an `AtgeoDecodingException` with the overflow as its cause; no other `Error` is caught, so an `OutOfMemoryError` fails the search. In practice `kotlinx.serialization` refuses deeply nested JSON with a `SerializationException` before its stack can overflow, so a deep body is an ordinary `DECODE`. A tile whose cached body fails to parse again would be `DECODE`; no test can reach that path, since the body parsed once already. Inserting a tile in the cache is outside the guarded part, so an exception there fails the search. The port logs nothing: neither the JVM nor Android has a standard facility that serves both without a dependency.
+
 ## Ordering a NaN distance (contract §8)
 
 The reference orders by subtracting (`a.distance - b.distance`), so a NaN distance compares as a tie with everything, which makes the comparator inconsistent and the resulting order engine-defined. Only out-of-range coordinates in place data (a latitude past ±90) can produce one. This port compares instead of subtracting, ties `-0` with `0` exactly as subtraction does, and sorts a NaN after every number, because Java's sort may throw on an inconsistent comparator.

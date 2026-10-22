@@ -61,6 +61,35 @@ class PrivacyTest {
         }
 
         @Test
+        fun `leaves every form of the text out of tileFailures`() = runTest {
+            val tiles = listOf("a", "b", "c", "d").map { "https://tiles.example/$it.json" }
+            val fake = FakeServer(
+                failTiles = setOf(tiles[0]),
+                tilesets = listOf(overture(tiles.map { FakeTile(it, listOf(record(place("r1", "Zanzibar Quokka Cafe", listOf(point(37.775, -122.418)))))) })),
+            )
+            val transport = HttpTransport { url ->
+                when (url) {
+                    tiles[1] -> HttpResponse(200, "<html>not a tile</html>".toByteArray())
+                    tiles[2] -> throw java.io.IOException("fetch failed")
+                    tiles[3] -> HttpResponse(500, "null".toByteArray())
+                    else -> fake.get(url)
+                }
+            }
+            val text = "  ZANZIBÁR   quokka "
+            val result = client(transport).searchPlaces(Region.Circle(37.7749295, -122.4194155, 500.0), text = text)
+            assertEquals(
+                listOf(TileFailure.Kind.STATUS, TileFailure.Kind.DECODE, TileFailure.Kind.TRANSPORT, TileFailure.Kind.STATUS),
+                result.tileFailures.map { it.kind },
+            )
+            val haystack = result.tileFailures.joinToString("\n") { f ->
+                listOf(f.toString(), f.error.toString(), f.error.message.orEmpty(), f.error.stackTraceToString()).joinToString("\n")
+            }.lowercase()
+            for (needle in listOf(text.lowercase(), text.trim().lowercase(), "zanzibar quokka", "zanzib", "quokka")) {
+                assertFalse(needle in haystack, "\"$needle\" in tileFailures")
+            }
+        }
+
+        @Test
         fun `sends no body`() = runTest {
             val fake = server()
             client(fake).searchPlaces(Region.Bbox(-122.43, 37.77, -122.41, 37.78), text = "Zanzibar Quokka")

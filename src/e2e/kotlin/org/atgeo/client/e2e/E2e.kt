@@ -36,7 +36,7 @@ public fun main(): Unit = runBlocking {
     log("describeTileset", "${tileset.slug}, ${tileset.collections.size} collection(s)")
 
     val nearby = client.searchPlaces(region, dataset = dataset, collection = collection, sort = SortMode.DISTANCE)
-    check(nearby.complete) { "${nearby.tiles.failed} tile(s) failed" }
+    check(nearby.complete) { "${nearby.tiles.failed} tile(s) failed: ${nearby.tileFailures}" }
     check(nearby.places.isNotEmpty()) { "no places in region" }
     val distances = nearby.places.map { it.distance }
     check(distances.withIndex().all { (i, d) -> d <= radius && (i == 0 || d >= distances[i - 1]) }) { "not distance-ordered within radius" }
