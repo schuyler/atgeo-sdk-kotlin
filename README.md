@@ -82,14 +82,14 @@ Whatever transport you use, don't give it a disk cache, or the client's promise 
 With neither `dataset` nor `collection` you search `overturemaps.org` / `place`; with only `collection`, that collection of `overturemaps.org`; with only `dataset`, every collection of that dataset together; with both, that collection.
 
 ```kotlin
-data class SearchResult(
+class SearchResult(
     val places: List<SearchHit>,
     val complete: Boolean,        // false if any tile failed to load
     val overview: Boolean,        // true if the server answered with its coarse overview
     val tiles: TileCounts,        // fetched and failed
 )
 
-data class SearchHit(
+class SearchHit(
     val origin: String?,          // place.origin, else the tile record's uri, else null
     val place: JsonObject,        // the record value, exactly as served
     val importance: Long?,        // relative to its tileset; null if it has none
@@ -100,6 +100,8 @@ data class SearchHit(
     val location: PlaceLocation   // point and/or box, parsed as the client parsed them for distance
 }
 ```
+
+These are plain classes rather than data classes, so that later versions can add fields without breaking apps built against this one: they compare by value and print like data classes, but have no `copy()` or destructuring, and only the client constructs them. The same goes for `PlaceRecord` and the describe types.
 
 `place` is the gazetteer's record untouched. `name` and `location` save you the two reads every app needs: `location.point` is the first usable `geo` entry of `place.locations`, `location.bbox` the first usable `bbox` entry (`west > east` crosses the antimeridian), coordinates already parsed from the strings they arrive as. For any other field, `place["field"].stringOrNull()` gives a string field or `null`, without the casts `JsonElement` otherwise needs. `PlaceRecord` has the same `name` and `location`.
 
