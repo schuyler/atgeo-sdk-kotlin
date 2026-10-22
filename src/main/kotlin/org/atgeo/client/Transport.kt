@@ -34,8 +34,12 @@ public fun interface HttpTransport {
     public suspend fun get(url: String): HttpResponse
 }
 
-/** A non-2xx answer from the server. `code` is the server's error name, or "HttpError" (contract §1). */
-public class AtgeoException(public val code: String, message: String) : RuntimeException(message)
+/**
+ * A non-2xx answer from the server. `code` is the server's error name, or "HttpError" (contract §1).
+ * `status` is the HTTP status the transport reported, so a caller can tell a refused request (4xx)
+ * from a server failure (5xx) without matching on `code`.
+ */
+public class AtgeoException(public val code: String, message: String, public val status: Int) : RuntimeException(message)
 
 /**
  * The default transport: `java.net.HttpURLConnection`, on every JVM and Android version with no
@@ -126,5 +130,5 @@ internal class Xrpc(server: String, private val transport: HttpTransport) {
 /** Each of `error` and `message` is judged on its own; a body that is not a JSON object has neither. */
 internal fun atgeoException(status: Int, body: ByteArray): AtgeoException {
     val obj = runCatching { parseBody(body) }.getOrNull() as? JsonObject
-    return AtgeoException(obj?.get("error").stringOrNull() ?: "HttpError", obj?.get("message").stringOrNull() ?: "HTTP $status")
+    return AtgeoException(obj?.get("error").stringOrNull() ?: "HttpError", obj?.get("message").stringOrNull() ?: "HTTP $status", status)
 }
