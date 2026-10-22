@@ -39,10 +39,12 @@ jobs:
           disable-animations: true
           script: |
             adb logcat -c
-            ./gradlew -p android-sample connectedDebugAndroidTest
-            adb logcat -d -s PROBE:I | tee probe.txt
+            ./gradlew -p android-sample connectedDebugAndroidTest || true
+            adb logcat -d -s PROBE:I TestRunner:* AndroidRuntime:E art:* | tee probe.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: probe-api${{ matrix.api }}
-          path: probe.txt
+          path: |
+            probe.txt
+            android-sample/app/build/outputs/androidTest-results/
