@@ -167,6 +167,16 @@ class TransportTest {
         }
 
         @Test
+        fun `reports an AtgeoException thrown by the transport as TRANSPORT, without a status`() = runTest {
+            val server = serverFor(listOf(tileUrl("a"), ok))
+            val thrown = AtgeoException("Teapot", "I'm a teapot", 418)
+            val transport = HttpTransport { url -> if (url == tileUrl("a")) throw thrown else server.get(url) }
+            val result = client(transport).searchPlaces(region)
+            assertEquals(listOf(Triple(tileUrl("a"), TileFailure.Kind.TRANSPORT, null)), result.summary())
+            assertSame<Throwable>(thrown, result.tileFailures.single().error)
+        }
+
+        @Test
         fun `reports a transport's own timeout as TRANSPORT`() = runTest {
             val server = serverFor(listOf(tileUrl("a"), ok))
             val transport = HttpTransport { url -> if (url == tileUrl("a")) withTimeout(10) { awaitCancellation() } else server.get(url) }
@@ -278,6 +288,34 @@ class TransportTest {
             "https://:443/a.json",
             "https:tiles.example/a.json",
             "httpſ://tiles.example/a.json",
+            // Backslash and slash mixes WHATWG reads as https://h/x; the check wants exactly ://.
+            "https:\\\\tiles.example/a.json",
+            "https:/\\tiles.example/a.json",
+            "https:\\/tiles.example/a.json",
+            "https://\\tiles.example/a.json",
+            // Ports WHATWG rejects: java.net.URL would fetch :+80.
+            "http://127.0.0.1:+80/a.json",
+            "http://tiles.example:-1/a.json",
+            "http://tiles.example:65536/a.json",
+            "http://tiles.example:8a/a.json",
+            "http://tiles.example:\u0668\u0660/a.json",
+            "http://tiles.example:80:90/a.json",
+            // Forbidden host code points.
+            "https://tiles example/a.json",
+            "https://tiles<.example/a.json",
+            "https://tiles>.example/a.json",
+            "https://tiles%41.example/a.json",
+            "https://tiles^.example/a.json",
+            "https://tiles|.example/a.json",
+            "https://tiles\u0000.example/a.json",
+            "https://tiles\u007F.example/a.json",
+            "https://tiles].example/a.json",
+            // Malformed IPv6.
+            "https://[::1/a.json",
+            "https://[::1]x/a.json",
+            "https://[fe80::1%25eth0]/a.json",
+            "https://[g::1]/a.json",
+            "https://[]/a.json",
         ).map { url ->
             dynamicTest(url) {
                 runTest {
@@ -306,6 +344,11 @@ class TransportTest {
             "https://tiles.example\\a.json",
             " https://tiles.example/a.json\n",
             "ht\ttps://tiles.example/a.json",
+            "http://tiles.example:/a.json",
+            "http://tiles.example:65535/a.json",
+            "http://tiles.example:0000080/a.json",
+            "https://[::ffff:1.2.3.4]:443/a.json",
+            "https://bücher.example/a.json",
         ).map { url ->
             dynamicTest(url.replace("\n", "\\n").replace("\t", "\\t")) {
                 runTest {

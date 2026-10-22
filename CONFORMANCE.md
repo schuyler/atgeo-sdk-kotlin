@@ -40,7 +40,10 @@ Before any transport sees a tile URL, the app's included, the client checks that
 |---|---|---|
 | `https://@h/x`, `https://:@h/x` (empty userinfo, no credentials) | the userinfo dropped, the URL fetched | a failed tile (`REFUSED`), as in the Python and Rust ports and as §4.4 allows: any `@` before the host is refused |
 | `https://h\@x/y` | host `h`, path `/@x/y`, fetched | a failed tile: the `@` is looked for up to the first `/`, `?` or `#`, because `java.net.URL` does not end the authority at a backslash and reads userinfo `h\` at host `x` |
-| `https:h/x`, `https:/h/x`, `https:///h/x` | fetched from host `h`: WHATWG ignores missing or extra slashes after a special scheme | a failed tile: the check wants exactly `://`, as the Rust port's does |
+| `https:h/x`, `https:/h/x`, `https:///h/x`, and backslash forms such as `https:\\h/x`, `https:/\h/x`, `https:\/h/x`, `https://\h/x` and other mixes of `/` and `\` | fetched from host `h`: WHATWG reads `\` as `/` and ignores missing or extra slashes after a special scheme | a failed tile: the check wants exactly `://`, as the Rust port's does, and an authority that starts with `\` has no host |
+| `https://h%41/x` | host `ha` once percent-decoded, fetched | a failed tile: `%` is refused in a host along with WHATWG's other forbidden host code points |
+
+The check also refuses what WHATWG's parser rejects and `java.net.URL` might not: a port that is not ASCII digits or is above 65535 (`java.net.URL` would fetch `http://127.0.0.1:+80/x`), a host with a forbidden host code point (a space, a control character, `<`, `>`, `^`, `|`, `[`, `]` and the like), and a bracketed IPv6 host that is unclosed, holds anything but hex digits, `:` and `.`, or is followed by anything but a port. Other URLs WHATWG would reject, such as an IPv4 address out of range (`http://1.2.3.256/x`), pass the check and are left to the transport; with the default transport they fail there, as `TRANSPORT`.
 
 A URL the check accepts can still fail in the transport where WHATWG would have cleaned it up: the default transport does not drop a tab or newline inside a URL, or read a backslash as `/`, so such a tile fails there as a transport error. `java.net.URL` trims the same characters at the ends that WHATWG does. Pinned by `TransportTest`.
 

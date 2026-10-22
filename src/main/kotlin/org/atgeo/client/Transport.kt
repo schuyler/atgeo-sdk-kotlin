@@ -160,11 +160,33 @@ internal fun isHttpUrl(url: String): Boolean {
     // java.net.URL does not: it reads `https://h\@x/y` as userinfo `h\` at host x. CONFORMANCE.md.
     if ('@' in rest.takeWhile { it != '/' && it != '?' && it != '#' }) return false
     val authority = rest.takeWhile { it != '/' && it != '\\' && it != '?' && it != '#' }
-    val host = if (authority.startsWith('[')) authority.substring(1).substringBefore(']') else authority.substringBefore(':')
+    val host: String
+    val port: String?
+    if (authority.startsWith('[')) {
+        val close = authority.indexOf(']')
+        if (close < 0) return false
+        host = authority.substring(1, close)
+        if (host.any { it !in IPV6_CHARS }) return false
+        val after = authority.substring(close + 1)
+        if (after.isNotEmpty() && !after.startsWith(':')) return false
+        port = after.takeIf { it.isNotEmpty() }?.substring(1)
+    } else {
+        host = authority.substringBefore(':')
+        port = if (':' in authority) authority.substringAfter(':') else null
+        // WHATWG's forbidden domain code points, which fail its parse, so fetch never sends them. A `%`
+        // is among them here, though WHATWG would decode `%41` to `A` first. CONFORMANCE.md.
+        if (host.any { it <= ' ' || it == '\u007F' || it in FORBIDDEN_HOST_CHARS }) return false
+    }
+    // A port is ASCII digits up to 65535, or empty for the default; java.net.URL would take `+80`.
+    if (port != null && (port.any { it !in '0'..'9' } || (port.trimStart('0').length > 5) || (port.isNotEmpty() && port.toLong() > 65535))) {
+        return false
+    }
     return host.isNotEmpty()
 }
 
 private val HTTP_SCHEMES = setOf("http", "https")
+private const val FORBIDDEN_HOST_CHARS = "#%/:<>?@[\\]^|"
+private const val IPV6_CHARS = "0123456789abcdefABCDEF:."
 
 /** The XRPC and tile layer above the transport seam: URLs, status checks, error bodies. */
 internal class Xrpc(server: String, private val transport: HttpTransport) {
@@ -202,6 +224,11 @@ internal class Xrpc(server: String, private val transport: HttpTransport) {
 
 /** Each of `error` and `message` is judged on its own; a body that is not a JSON object has neither. */
 internal fun atgeoException(status: Int, body: ByteArray): AtgeoException {
-    val obj = runCatching { parseBody(body) }.getOrNull() as? JsonObject
+    // Not runCatching, which would catch an Error too: an OutOfMemoryError here must not become a STATUS tile.
+    val obj = try {
+        parseBody(body)
+    } catch (e: Exception) {
+        null
+    } as? JsonObject
     return AtgeoException(obj?.get("error").stringOrNull() ?: "HttpError", obj?.get("message").stringOrNull() ?: "HTTP $status", status)
 }

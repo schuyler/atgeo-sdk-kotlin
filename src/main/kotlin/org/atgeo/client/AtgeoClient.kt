@@ -156,8 +156,8 @@ public class AtgeoClient internal constructor(
     // insert is the client's own work and is not, so that a bug there fails the search instead of
     // passing for a run of bad tiles. Only the search's own cancellation propagates from the guarded
     // part: a transport's withTimeout throws TimeoutCancellationException, a CancellationException, and
-    // that is a failed tile. An Error is not caught, but for a StackOverflowError while decoding (decodeTile):
-    // an OutOfMemoryError while parsing must not pass for one bad tile.
+    // that is a failed tile. No Error is caught except a StackOverflowError from decodeTile; an
+    // OutOfMemoryError must not pass for one bad tile.
     private suspend fun loadTile(url: String): TileOutcome {
         if (!isHttpUrl(url)) {
             val error = MalformedURLException("tile URL is not an absolute http or https URL without credentials")
