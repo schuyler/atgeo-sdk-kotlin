@@ -17,10 +17,14 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.zip.GZIPOutputStream
+import java.io.IOException
 import kotlin.test.assertContentEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+
+private const val CAP = 100_000
 
 /** The default transport against a loopback server (no reference counterpart: the fake replaces it everywhere else). */
 class HttpUrlConnectionTransportTest {
@@ -80,6 +84,21 @@ class HttpUrlConnectionTransportTest {
             it.responseHeaders.add("Content-Encoding", "gzip")
             it.respond(404, null)
         }
+        server.createContext("/bytes/") { exchange ->
+            val size = exchange.requestURI.path.substringAfterLast('/').toInt()
+            val body = ByteArray(size) { 'x'.code.toByte() }
+            exchange.sendResponseHeaders(200, body.size.toLong())
+            exchange.responseBody.use { it.write(body) }
+            exchange.close()
+        }
+        // A few kilobytes on the wire, CAP * 64 once decoded.
+        server.createContext("/gzip-bomb") { exchange ->
+            val packed = java.io.ByteArrayOutputStream().also { out -> GZIPOutputStream(out).use { it.write(ByteArray(CAP * 64)) } }.toByteArray()
+            exchange.responseHeaders.add("Content-Encoding", "gzip")
+            exchange.sendResponseHeaders(200, packed.size.toLong())
+            exchange.responseBody.use { it.write(packed) }
+            exchange.close()
+        }
         server.createContext("/headers") { exchange ->
             seenHeaders.add(exchange.requestHeaders.mapKeys { it.key.lowercase() })
             exchange.respond(200, "{}")
@@ -127,6 +146,26 @@ class HttpUrlConnectionTransportTest {
         val response = transport.get("$base/gzip-empty")
         assertEquals(404, response.status)
         assertContentEquals(ByteArray(0), response.body)
+    }
+
+    @Test
+    fun `reads a body of exactly maxBodyBytes`() = runBlocking {
+        assertEquals(CAP, HttpUrlConnectionTransport(maxBodyBytes = CAP).get("$base/bytes/$CAP").body.size)
+    }
+
+    @Test
+    fun `fails with IOException for a body over maxBodyBytes`() = runBlocking<Unit> {
+        assertFailsWith<IOException> { HttpUrlConnectionTransport(maxBodyBytes = CAP).get("$base/bytes/${CAP + 1}") }
+    }
+
+    @Test
+    fun `fails with IOException for a small gzip body that decodes over maxBodyBytes`() = runBlocking<Unit> {
+        assertFailsWith<IOException> { HttpUrlConnectionTransport(maxBodyBytes = CAP).get("$base/gzip-bomb") }
+    }
+
+    @Test
+    fun `rejects a maxBodyBytes that is not positive`() {
+        assertFailsWith<IllegalArgumentException> { HttpUrlConnectionTransport(maxBodyBytes = 0) }
     }
 
     // On the JDK, disconnect() does not interrupt a body read already in progress, so this asserts

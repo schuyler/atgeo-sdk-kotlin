@@ -9,7 +9,9 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
 import java.net.URL
@@ -44,11 +46,24 @@ public class AtgeoException(public val code: String, message: String) : RuntimeE
  * already in progress until it ends or `readTimeoutMillis` passes, because `disconnect()` does not
  * interrupt that read. Apps that cancel often should supply a transport that tears requests down on
  * the wire, such as OkHttp's (android-sample/ has one).
+ *
+ * @param maxBodyBytes the most a response body may hold once decoded; a larger one is an
+ *   [IOException], so inside a search a failed tile. The server names the tile URLs, and a gzip body
+ *   of a few kilobytes can decode to gigabytes. The largest tile places.atgeo.org serves is about 2 MB.
  */
 public class HttpUrlConnectionTransport(
     private val connectTimeoutMillis: Int = 10_000,
     private val readTimeoutMillis: Int = 30_000,
+    private val maxBodyBytes: Int = DEFAULT_MAX_BODY_BYTES,
 ) : HttpTransport {
+    init {
+        require(maxBodyBytes > 0) { "maxBodyBytes must be positive" }
+    }
+
+    public companion object {
+        public const val DEFAULT_MAX_BODY_BYTES: Int = 32 * 1024 * 1024
+    }
+
     override suspend fun get(url: String): HttpResponse = suspendCancellableCoroutine { cont ->
         // The caller is suspended, not blocked: the request runs on an IO thread, so cancellation
         // releases the caller whatever the socket is doing, and a late resume is ignored.
@@ -78,15 +93,27 @@ public class HttpUrlConnectionTransport(
                 // is null for an empty error body.
                 val status = connection.responseCode
                 val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-                val raw = stream?.use { it.readBytes() } ?: ByteArray(0)
+                val raw = stream?.use { it.readAtMost(maxBodyBytes) } ?: ByteArray(0)
                 // An empty body has no gzip header to read, whatever Content-Encoding says.
                 val gzipped = connection.contentEncoding.equals("gzip", ignoreCase = true) && raw.isNotEmpty()
-                val body = if (gzipped) GZIPInputStream(raw.inputStream()).use { it.readBytes() } else raw
+                val body = if (gzipped) GZIPInputStream(raw.inputStream()).use { it.readAtMost(maxBodyBytes) } else raw
                 cont.resume(HttpResponse(status, body))
             } catch (t: Throwable) {
                 cont.resumeWithException(t)
             }
         }
+    }
+}
+
+/** Reads to the end, or throws as soon as the stream has given more than `limit` bytes. */
+private fun InputStream.readAtMost(limit: Int): ByteArray {
+    val out = ByteArrayOutputStream()
+    val buffer = ByteArray(64 * 1024)
+    while (true) {
+        val n = read(buffer)
+        if (n < 0) return out.toByteArray()
+        if (out.size().toLong() + n > limit) throw IOException("response body is larger than $limit bytes")
+        out.write(buffer, 0, n)
     }
 }
 
