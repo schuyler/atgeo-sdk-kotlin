@@ -127,4 +127,11 @@ class ConcurrencyTest {
         assertIs<CancellationException>(runCatching { search.await() }.exceptionOrNull())
         assertTrue(search.isCancelled)
     }
+
+    @Test
+    fun `lets an Error from a tile fetch fail the search rather than count as a failed tile`() = runTest {
+        val server = manyTiles(2)
+        val transport = HttpTransport { url -> if (url == tileUrl("t01")) throw OutOfMemoryError("probe") else server.get(url) }
+        assertFailsWith<OutOfMemoryError> { client(transport).searchPlaces(region) }
+    }
 }

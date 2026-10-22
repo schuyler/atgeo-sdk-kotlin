@@ -142,9 +142,10 @@ public class AtgeoClient internal constructor(
             val records = readTilePayload(parseBody(body))
             mutex.withLock { tiles.set(url, TileCache.Entry(records, body.size.toLong())) }
             records
-        } catch (t: Throwable) {
+        } catch (e: Exception) {
             // Only the search's own cancellation propagates. A transport's withTimeout throws
             // TimeoutCancellationException, a CancellationException, and that is a failed tile.
+            // An Error is not caught: an OutOfMemoryError while parsing must not pass for one bad tile.
             currentCoroutineContext().ensureActive()
             null
         }
