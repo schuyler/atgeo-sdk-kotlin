@@ -12,6 +12,7 @@ import org.junit.jupiter.api.TestFactory
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 
 private val region = Region.Bbox(-122.42, 37.77, -122.41, 37.78)
 
@@ -222,17 +223,20 @@ class TransportTest {
         }
 
         @Test
-        fun `raises SerializationException for a 2xx body that is not JSON`() = runTest {
+        fun `raises AtgeoDecodingException for a 2xx body that is not JSON`() = runTest {
             val xrpc = Xrpc("https://example.org", { HttpResponse(200, "upstream error".toByteArray()) })
-            assertFailsWith<SerializationException> { xrpc.query("org.atgeo.describeService") }
+            val error = assertFailsWith<AtgeoDecodingException> { xrpc.query("org.atgeo.describeService") }
+            // An IOException, so it is caught with network failures, never as an IllegalArgumentException.
+            assertIs<IOException>(error)
+            assertIs<SerializationException>(error.cause)
         }
 
         // The tree parser reads a lone unquoted token as a primitive (CONFORMANCE.md); every reader
         // then rejects it for not being an object, so the call still fails the same way.
         @Test
-        fun `raises SerializationException for a 2xx body that is a lone unquoted token`() = runTest {
+        fun `raises AtgeoDecodingException for a 2xx body that is a lone unquoted token`() = runTest {
             val xrpc = Xrpc("https://example.org", { HttpResponse(200, "<html>".toByteArray()) })
-            assertFailsWith<SerializationException> { readServiceDescription(xrpc.query("org.atgeo.describeService")) }
+            assertFailsWith<AtgeoDecodingException> { readServiceDescription(xrpc.query("org.atgeo.describeService")) }
         }
     }
 }

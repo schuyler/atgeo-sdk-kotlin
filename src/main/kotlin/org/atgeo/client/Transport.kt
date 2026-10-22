@@ -42,6 +42,13 @@ public fun interface HttpTransport {
 public class AtgeoException(public val code: String, message: String, public val status: Int) : RuntimeException(message)
 
 /**
+ * A 2xx answer the client could not use: not JSON, or JSON without what the call needs (contract §1).
+ * An IOException, like a network failure, because to a caller it is one: the server's answer did not
+ * arrive in usable form. Inside a search a tile that fails this way is a failed tile, not an error.
+ */
+public class AtgeoDecodingException(message: String, cause: Throwable? = null) : IOException(message, cause)
+
+/**
  * The default transport: `java.net.HttpURLConnection`, on every JVM and Android version with no
  * dependency. It asks for gzip and decodes it, which the JDK does not do on its own. Cancelling the
  * caller returns at once; on the JDK the socket may keep reading a body
@@ -107,7 +114,7 @@ internal class Xrpc(server: String, private val transport: HttpTransport) {
         return "$base/xrpc/$nsid" + if (query.isEmpty()) "" else "?$query"
     }
 
-    /** A parsed 2xx body. Throws AtgeoException on any other status, SerializationException if not JSON. */
+    /** A parsed 2xx body. Throws AtgeoException on any other status, AtgeoDecodingException if not JSON. */
     suspend fun query(nsid: String, params: List<Pair<String, String>> = emptyList()): JsonElement =
         parseBody(get(url(nsid, params)))
 

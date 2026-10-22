@@ -1,7 +1,6 @@
 package org.atgeo.client
 
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -49,12 +48,12 @@ class RobustnessTest {
     @DisplayName("getTiles bodies")
     inner class GetTilesBodies {
         @TestFactory
-        fun `raise SerializationException without a tiles array`(): List<DynamicTest> =
+        fun `raise AtgeoDecodingException without a tiles array`(): List<DynamicTest> =
             listOf("{}", "[]", """{"tiles": "x"}""", "null").map { body ->
                 dynamicTest(body) {
                     runTest {
                         val server = FakeServer(responses = mapOf(GET_TILES to raw(body)))
-                        assertFailsWith<SerializationException> { client(server).searchPlaces(region) }
+                        assertFailsWith<AtgeoDecodingException> { client(server).searchPlaces(region) }
                     }
                 }
             }
@@ -67,7 +66,7 @@ class RobustnessTest {
                 if (url == GET_TILES && calls++ == 0) raw("{}") else good.get(url)
             }
             val client = client(flaky)
-            assertFailsWith<SerializationException> { client.searchPlaces(region) }
+            assertFailsWith<AtgeoDecodingException> { client.searchPlaces(region) }
             assertEquals(listOf(placeOrigin("a")), client.searchPlaces(region).places.map { it.origin })
             assertEquals(2, calls)
         }
@@ -173,30 +172,30 @@ class RobustnessTest {
         private val describeTileset = Xrpc(DEFAULT_SERVER, { error("unused") }).url("org.atgeo.describeTileset", listOf("slug" to "s"))
 
         @TestFactory
-        fun `raise SerializationException for a getPlace body with no object record`(): List<DynamicTest> =
+        fun `raise AtgeoDecodingException for a getPlace body with no object record`(): List<DynamicTest> =
             listOf("{}", "null", """{"uri": "x", "record": 5}""", """{"record": null}""").map { body ->
                 dynamicTest(body) {
                     runTest {
                         val server = FakeServer(responses = mapOf(getPlace to raw(body)))
-                        assertFailsWith<SerializationException> { client(server).getPlace(placeOrigin("a")) }
+                        assertFailsWith<AtgeoDecodingException> { client(server).getPlace(placeOrigin("a")) }
                     }
                 }
             }
 
         @TestFactory
-        fun `raise SerializationException for a describe body that is not an object`(): List<DynamicTest> =
+        fun `raise AtgeoDecodingException for a describe body that is not an object`(): List<DynamicTest> =
             listOf("null", "false", "0", "\"\"", "[]").flatMap { body ->
                 listOf(
                     dynamicTest("describeService $body") {
                         runTest {
                             val server = FakeServer(responses = mapOf(describeService to raw(body)))
-                            assertFailsWith<SerializationException> { client(server).describeService() }
+                            assertFailsWith<AtgeoDecodingException> { client(server).describeService() }
                         }
                     },
                     dynamicTest("describeTileset $body") {
                         runTest {
                             val server = FakeServer(responses = mapOf(describeTileset to raw(body)))
-                            assertFailsWith<SerializationException> { client(server).describeTileset("s") }
+                            assertFailsWith<AtgeoDecodingException> { client(server).describeTileset("s") }
                         }
                     },
                 )

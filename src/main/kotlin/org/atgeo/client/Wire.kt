@@ -44,12 +44,19 @@ internal fun JsonElement?.truthy(): Boolean = when (this) {
     else -> true
 }
 
-/** Parses a response body. Malformed UTF-8 becomes U+FFFD, as with fetch's text(). */
-internal fun parseBody(body: ByteArray): JsonElement = Json.parseToJsonElement(body.decodeToString())
+/**
+ * Parses a response body. Malformed UTF-8 becomes U+FFFD, as with fetch's text(). Throws
+ * AtgeoDecodingException, with the parser's SerializationException as its cause, when it is not JSON.
+ */
+internal fun parseBody(body: ByteArray): JsonElement = try {
+    Json.parseToJsonElement(body.decodeToString())
+} catch (e: SerializationException) {
+    throw AtgeoDecodingException("response body is not JSON: ${e.message}", e)
+}
 
-private fun unusable(what: String): Nothing = throw SerializationException(what)
+private fun unusable(what: String): Nothing = throw AtgeoDecodingException(what)
 
-/** The usable records of a tile payload. Throws SerializationException when there is no `records` array. */
+/** The usable records of a tile payload. Throws AtgeoDecodingException when there is no `records` array. */
 internal fun readTilePayload(body: JsonElement): List<TileRecord> {
     val records = (body as? JsonObject)?.get("records") as? JsonArray ?: unusable("tile payload has no records array")
     return records.mapNotNull { element ->
@@ -61,14 +68,14 @@ internal fun readTilePayload(body: JsonElement): List<TileRecord> {
 
 internal data class TileList(val tiles: List<String>, val overview: Boolean)
 
-/** A getTiles answer. Throws SerializationException when there is no `tiles` array; non-string entries are skipped. */
+/** A getTiles answer. Throws AtgeoDecodingException when there is no `tiles` array; non-string entries are skipped. */
 internal fun readTileList(body: JsonElement): TileList {
     val obj = body as? JsonObject ?: unusable("getTiles body is not an object")
     val tiles = obj["tiles"] as? JsonArray ?: unusable("getTiles body has no tiles array")
     return TileList(tiles.mapNotNull { it.stringOrNull() }, obj["overview"].truthy())
 }
 
-/** A getPlace answer's record and importance. Throws SerializationException when there is no object `record`. */
+/** A getPlace answer's record and importance. Throws AtgeoDecodingException when there is no object `record`. */
 internal fun readPlace(body: JsonElement): Pair<JsonObject, Long?> {
     val obj = body as? JsonObject ?: unusable("getPlace body is not an object")
     val record = obj["record"] as? JsonObject ?: unusable("getPlace body has no record object")
@@ -108,7 +115,7 @@ private fun collectionInfo(o: JsonObject) = CollectionInfo(
     attributes = o.strings("attributes"),
 )
 
-/** A describeService answer. Throws SerializationException when the body is not an object. */
+/** A describeService answer. Throws AtgeoDecodingException when the body is not an object. */
 internal fun readServiceDescription(body: JsonElement): ServiceDescription {
     val obj = body as? JsonObject ?: unusable("describeService body is not an object")
     return ServiceDescription(
@@ -119,7 +126,7 @@ internal fun readServiceDescription(body: JsonElement): ServiceDescription {
     )
 }
 
-/** A describeTileset answer. Throws SerializationException when the body is not an object. */
+/** A describeTileset answer. Throws AtgeoDecodingException when the body is not an object. */
 internal fun readTileset(body: JsonElement): Tileset {
     val obj = body as? JsonObject ?: unusable("describeTileset body is not an object")
     return Tileset(

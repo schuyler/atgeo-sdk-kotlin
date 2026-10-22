@@ -120,10 +120,10 @@ A tileset's collections, attribution and extent. Not cached. The describe types 
 - `AtgeoException` has the server's error `code` (`PlaceNotFound`, `BboxTooLarge`, `DatasetNotFound` and so on), or `HttpError` when the server didn't send one, and the HTTP `status`. Use `status` to tell a request the server refused (4xx) from one it failed to answer (5xx); codes are an open list and new ones may appear.
 - `searchPlaces` throws `IllegalArgumentException` for an invalid region or for `SIMILARITY` without text, before any request.
 - A failed `getTiles` fails the search. A failed tile does not: it's skipped, counted in `tiles.failed`, and `complete` is `false`.
-- A 2xx body with nothing usable in it throws `kotlinx.serialization.SerializationException`. Network errors come through as whatever the transport throws, usually `IOException`. A transport that gives up by throwing `CancellationException` while your coroutine is still running (its own `withTimeout`, say) is reported as `SocketTimeoutException`, or as `IOException` for anything but a timeout, so that it can't end your coroutine silently.
+- A 2xx body with nothing usable in it, or that isn't JSON, throws `AtgeoDecodingException`, an `IOException`: as far as your app is concerned the answer didn't arrive. Retrying rarely helps; the server sends the same body again. Network errors come through as whatever the transport throws, usually `IOException`. A transport that gives up by throwing `CancellationException` while your coroutine is still running (its own `withTimeout`, say) is reported as `SocketTimeoutException`, or as `IOException` for anything but a timeout, so that it can't end your coroutine silently.
 - Cancelling the calling coroutine stops the search and throws `CancellationException`.
 
-`SerializationException` is a subclass of `IllegalArgumentException`, so a `catch (e: IllegalArgumentException)` meant for a bad region also catches a garbled server answer. Catch `SerializationException` first if you tell the two apart. And as anywhere in coroutines, don't let a `catch (e: Exception)` swallow `CancellationException`; rethrow it.
+So the type tells you what went wrong: `IllegalArgumentException` is a bad argument, `AtgeoException` an answer the server refused or failed, and an `IOException` (with the default transport) means no usable answer arrived. As anywhere in coroutines, don't let a `catch (e: Exception)` swallow `CancellationException`; rethrow it.
 
 ## Privacy
 
