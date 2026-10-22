@@ -24,7 +24,9 @@ private const val ONE_HOUR_MILLIS = 3_600_000L
  * searched for. Thread-safe; share one per server for the life of the process.
  *
  * @param transport how requests are made. The default uses `HttpURLConnection` and no dependency.
- * @param cacheBudgetBytes cap on the in-memory tile cache.
+ * @param cacheBudgetBytes cap on the in-memory tile cache, counted as the size of the tiles' response
+ *   bodies, which is what the cache holds. The latest search's tiles are also kept parsed, at 5 to 7
+ *   times their size, outside the budget.
  * @param computeDispatcher where tiles are parsed and results ranked, so that a search started on
  *   a UI thread does no CPU work there.
  */
@@ -49,9 +51,10 @@ public class AtgeoClient internal constructor(
 
     private val xrpc = Xrpc(server, transport)
 
-    // Guards the three caches. Never held across a transport call.
+    // Guards the caches. Never held across a transport call.
     private val mutex = Mutex()
     private val tiles = TileCache(cacheBudgetBytes)
+    private val parsed = ParsedTiles()
     private val tileLists = TtlCache<TileList>(ONE_HOUR_MILLIS, clock)
     private val service = TtlCache<ServiceDescription>(ONE_HOUR_MILLIS, clock)
 
@@ -96,7 +99,7 @@ public class AtgeoClient internal constructor(
 
         // The reference's mapLimit: workers claim URLs in order, at most 8 in flight. Each writes only
         // its own slots (null for a failed tile), so no counter is shared between threads.
-        val slots = arrayOfNulls<List<TileRecord>>(urls.size)
+        val slots = arrayOfNulls<Pair<TileCache.Entry, List<TileRecord>>>(urls.size)
         val next = AtomicInteger(0)
         coroutineScope {
             repeat(min(MAX_TILES_IN_FLIGHT, urls.size)) {
@@ -111,10 +114,11 @@ public class AtgeoClient internal constructor(
         }
         val fetched = slots.count { it != null }
         val failed = urls.size - fetched
+        mutex.withLock { parsed.replace(urls.indices.mapNotNull { i -> slots[i]?.let { urls[i] to it } }.toMap()) }
 
         val prefix = collection?.let { "urn:atgeo:$dataset:$it:" }
         // dedupe picks a winner before the region filter runs, as the reference does (contract §4.6).
-        val records = dedupe(slots.flatMap { it.orEmpty() })
+        val records = dedupe(slots.flatMap { it?.second.orEmpty() })
             .filter { prefix == null || it.value["origin"].stringOrNull()?.startsWith(prefix) == true }
             .filter { inRegion(locate(it.value), region) }
         SearchResult(rank(records, region, query, sort), failed == 0, overview, SearchResult.TileCounts(fetched, failed))
@@ -133,15 +137,19 @@ public class AtgeoClient internal constructor(
         return list
     }
 
-    // The tile's records, or null if it failed. Checks the cache when the worker reaches the URL, as
-    // the reference does, so recency is touched in the same order.
-    private suspend fun loadTile(url: String): List<TileRecord>? {
-        mutex.withLock { tiles.get(url) }?.let { return it.records }
+    // The tile's cache entry and records, or null if it failed. Checks the cache when the worker reaches
+    // the URL, as the reference does, so recency is touched in the same order. A cached body parsed once
+    // already, so parsing it again cannot fail.
+    private suspend fun loadTile(url: String): Pair<TileCache.Entry, List<TileRecord>>? {
+        mutex.withLock { tiles.get(url)?.let { it to parsed.get(url, it) } }?.let { (entry, records) ->
+            return entry to (records ?: readTilePayload(parseBody(entry.body)))
+        }
         return try {
             val body = xrpc.get(url)
             val records = readTilePayload(parseBody(body))
-            mutex.withLock { tiles.set(url, TileCache.Entry(records, body.size.toLong())) }
-            records
+            val entry = TileCache.Entry(body, records.mapNotNullTo(HashSet()) { recordKey(it) })
+            mutex.withLock { tiles.set(url, entry) }
+            entry to records
         } catch (e: Exception) {
             // Only the search's own cancellation propagates. A transport's withTimeout throws
             // TimeoutCancellationException, a CancellationException, and that is a failed tile.
@@ -158,8 +166,14 @@ public class AtgeoClient internal constructor(
      * @throws AtgeoException `PlaceNotFound` when the server has no such place.
      */
     public suspend fun getPlace(origin: String): PlaceRecord {
-        // The scan walks every cached record, so it runs off the caller's thread.
-        val cached = withContext(computeDispatcher) { mutex.withLock { tiles.find(origin) } }
+        // The scan walks every cached tile's keys and may parse the one that matches, so it runs off the
+        // caller's thread. Within that tile the first record with the key wins.
+        val cached = withContext(computeDispatcher) {
+            val found = mutex.withLock { tiles.find(origin)?.let { (url, entry) -> entry to parsed.get(url, entry) } }
+            found?.let { (entry, records) ->
+                (records ?: readTilePayload(parseBody(entry.body))).first { recordKey(it) == origin }
+            }
+        }
         if (cached != null) return PlaceRecord(origin, cached.value, cached.importance)
         val (record, importance) = readPlace(xrpc.query("org.atgeo.getPlace", listOf("uri" to origin)))
         return PlaceRecord(origin, record, importance)

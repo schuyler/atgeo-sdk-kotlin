@@ -135,6 +135,8 @@ A search asks the server which tiles cover a bounding box snapped outward to a 0
 
 Tile lists and the service description are cached for an hour, tiles in memory up to `cacheBudgetBytes`, least recently used out first. A repeat search over a warm region makes no requests at all. Nothing is persisted; a new client starts cold.
 
+The budget counts the tiles' response bodies, and that is what the cache keeps, so it is close to what the cache costs in heap (about 1.1×, the rest being an index for `getPlace`). Parsed, a tile takes five to seven times its body size, so only the latest search's tiles stay parsed: searching the same region again with different text, as a user types, parses nothing. A tile from an older search is parsed again from its body when a search reaches it, which on a phone takes tens of milliseconds per tile. Budget for the default 50 MiB plus a few times the size of one region's tiles, which in a dense city is around 7 MB of bodies.
+
 ## Notes
 
 The behaviour is defined once for every port in [docs/port-contract.md](https://github.com/schuyler/atgeo-sdk-js/blob/main/docs/port-contract.md), and the Kotlin-specific decisions are in [docs/kotlin-sdk-spec.md](https://github.com/schuyler/atgeo-sdk-js/blob/main/docs/kotlin-sdk-spec.md). Where this port reads malformed input differently from the reference (`"0x1p3"` is 8 here and 0 there), [CONFORMANCE.md](CONFORMANCE.md) lists it. A compliant server never sends any of it.
