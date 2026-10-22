@@ -80,6 +80,7 @@ class TransportTest {
             val server = FakeServer(tilesFor = { TilesAnswer.Error("BboxTooLarge", "bbox too large") })
             val error = assertFailsWith<AtgeoException> { client(server).searchPlaces(region) }
             assertEquals("BboxTooLarge", error.code)
+            assertEquals(400, error.status)
         }
 
         @Test
@@ -201,6 +202,21 @@ class TransportTest {
                     val xrpc = Xrpc("https://example.org", { HttpResponse(400, body.toByteArray()) })
                     val error = assertFailsWith<AtgeoException> { xrpc.query("org.atgeo.getTiles") }
                     assertEquals(expected, error.code to error.message)
+                    assertEquals(400, error.status)
+                }
+            }
+        }
+
+        @TestFactory
+        fun `carries the status, whatever the body says`(): List<DynamicTest> = listOf(
+            404 to """{"error": "PlaceNotFound"}""",
+            429 to "",
+            503 to """{"error": "InvalidRequest", "message": "a 5xx with a 4xx-sounding code"}""",
+        ).map { (status, body) ->
+            dynamicTest("$status") {
+                runTest {
+                    val xrpc = Xrpc("https://example.org", { HttpResponse(status, body.toByteArray()) })
+                    assertEquals(status, assertFailsWith<AtgeoException> { xrpc.query("org.atgeo.getPlace") }.status)
                 }
             }
         }
