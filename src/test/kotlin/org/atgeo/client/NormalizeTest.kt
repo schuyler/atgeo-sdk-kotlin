@@ -23,22 +23,4 @@ class NormalizeTest {
                 dynamicTest("normalizes $input") { assertEquals(expected, normalize(input)) }
             }
     }
-
-    // Contract §7 names the first three and asks each port to test them itself until the fixture does.
-    // The other three are the Greek final-sigma cases the Swift port tests; values from the reference.
-    @Nested
-    @DisplayName("case mapping (no reference counterpart)")
-    inner class CaseMapping {
-        @TestFactory
-        fun `lowercases like V8`(): List<DynamicTest> = listOf(
-            "ΟΔΟΣ" to "οδος",
-            "İstanbul" to "istanbul",
-            "ẞ" to "ß",
-            "Ὀδυσσεύς" to "οδυσσευς",
-            "Α.Σ." to "α.ς.",
-            "ΑΣ.Α" to "ασ.α",
-        ).map { (input, expected) ->
-            dynamicTest("normalizes $input") { assertEquals(expected, normalize(input)) }
-        }
-    }
 }
