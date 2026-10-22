@@ -1,0 +1,22 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+.kotlin/
+
+# Android sample
+android-sample/.gradle/
+android-sample/build/
+android-sample/app/build/
+local.properties
+*.apk
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+.fleet/
+out/
+
+# OS
+.DS_Store
