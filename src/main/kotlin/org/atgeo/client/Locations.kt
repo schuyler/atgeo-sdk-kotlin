@@ -13,9 +13,40 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
 
-internal data class BoxLocation(val south: Double, val north: Double, val segments: List<LonSegment>)
+// west and east are kept as served for PlaceLocation; the geometry uses segments.
+internal data class BoxLocation(val south: Double, val north: Double, val segments: List<LonSegment>, val west: Double, val east: Double)
 
 internal data class Locations(val point: LatLon?, val bbox: BoxLocation?)
+
+/**
+ * Where a place is, read from its `locations` exactly as the client reads it to rank and filter
+ * (contract §5): the first usable point and the first usable box, either or both absent. Coordinates
+ * may be strings or numbers on the wire; here they are parsed, finite, and not range-checked.
+ */
+public class PlaceLocation internal constructor(public val point: Point?, public val bbox: Box?) {
+    /** A point in degrees. */
+    public data class Point(val lat: Double, val lon: Double)
+
+    /**
+     * A box in degrees, with the lexicon's names. `west > east` crosses the antimeridian, and ±180
+     * are the same meridian.
+     */
+    public data class Box(val south: Double, val west: Double, val north: Double, val east: Double)
+
+    override fun equals(other: Any?): Boolean = other is PlaceLocation && point == other.point && bbox == other.bbox
+
+    override fun hashCode(): Int = 31 * point.hashCode() + bbox.hashCode()
+
+    override fun toString(): String = "PlaceLocation(point=$point, bbox=$bbox)"
+}
+
+internal fun placeLocation(place: JsonObject): PlaceLocation {
+    val (point, bbox) = locate(place)
+    return PlaceLocation(
+        point?.let { PlaceLocation.Point(it.lat, it.lon) },
+        bbox?.let { PlaceLocation.Box(it.south, it.west, it.north, it.east) },
+    )
+}
 
 private const val GEO = "community.lexicon.location.geo"
 private const val BBOX = "community.lexicon.location.bbox"
@@ -45,7 +76,7 @@ internal fun locate(value: JsonObject): Locations {
             val west = coordinate(loc["west"])
             val east = coordinate(loc["east"])
             if (south != null && north != null && west != null && east != null) {
-                bbox = BoxLocation(south, north, lonSegments(west, east))
+                bbox = BoxLocation(south, north, lonSegments(west, east), west, east)
             }
         }
     }

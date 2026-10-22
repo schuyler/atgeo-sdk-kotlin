@@ -33,7 +33,7 @@ private fun divisions(tiles: List<FakeTile>) = FakeTileset("overture-division", 
 private fun division(id: String, name: String, lat: Double = 37.775) =
     place(id, name, listOf(point(lat, -122.415)), mapOf("origin" to JsonPrimitive("urn:atgeo:overturemaps.org:division:$id")))
 
-private fun nameOf(hit: SearchHit) = hit.place["name"].stringOrNull()
+private fun nameOf(hit: SearchHit) = hit.name
 
 class MergeTest {
     @Nested

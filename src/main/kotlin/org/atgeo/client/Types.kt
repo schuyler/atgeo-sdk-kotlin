@@ -26,9 +26,21 @@ public data class SearchHit(
     val distance: Double,
     /** 0 to 1; null when the search had no text. */
     val score: Double?,
-)
+) {
+    /** `place.name` if it is a string. */
+    val name: String? get() = place["name"].stringOrNull()
 
-public data class PlaceRecord(val origin: String, val place: JsonObject, val importance: Long?)
+    /** The place's point and box, as the client read them to compute [distance]. */
+    val location: PlaceLocation get() = placeLocation(place)
+}
+
+public data class PlaceRecord(val origin: String, val place: JsonObject, val importance: Long?) {
+    /** `place.name` if it is a string. */
+    val name: String? get() = place["name"].stringOrNull()
+
+    /** The place's point and box, read as a search reads them. */
+    val location: PlaceLocation get() = placeLocation(place)
+}
 
 // The describe types. Every field is optional so that a missing one never
 // fails a call; responses are mapped by hand in Wire.kt, never through these
