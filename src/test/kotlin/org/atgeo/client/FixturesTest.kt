@@ -10,7 +10,7 @@ import kotlin.test.assertTrue
 class FixturesTest {
     @Test
     fun `shared fixtures parse and have the expected case counts`() {
-        assertEquals(36, (fixture("normalize.json") as JsonArray).size)
+        assertEquals(41, (fixture("normalize.json") as JsonArray).size)
         assertEquals(33, (fixture("jaro-winkler.json") as JsonArray).size)
         assertEquals(12, (fixture("ranking-scenarios.json") as JsonArray).size)
     }
