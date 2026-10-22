@@ -1,7 +1,6 @@
 package org.atgeo.client
 
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Nested
@@ -9,13 +8,12 @@ import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
 import kotlin.test.assertNull
+import kotlin.test.assertNotSame
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
-private fun entry(size: Long, vararg origins: String) = TileCache.Entry(
-    origins.map { TileRecord(JsonObject(mapOf("origin" to JsonPrimitive(it), "name" to JsonPrimitive("$it@$size")))) },
-    size,
-)
+// A cache entry for a tile holding a record per origin, counted as `size` bytes whatever its body.
+private fun entry(size: Long, vararg origins: String) = TileCache.Entry(ByteArray(0), origins.toSet(), size)
 
 private val region = Region.Bbox(-122.42, 37.77, -122.41, 37.78)
 private const val OTHER_ORIGIN = "urn:atgeo:example.org:thing:shared"
@@ -185,6 +183,79 @@ class CacheTest {
         }
     }
 
+    // The tile cache holds bodies and the latest search's tiles stay parsed (TileCache, ParsedTiles).
+    // None of it may change what is fetched or returned. No reference counterpart.
+    @Nested
+    @DisplayName("parsed tiles of the latest search")
+    inner class ParsedLatest {
+        private fun kotlinx.coroutines.test.TestScope.budgeted(fake: FakeServer, budget: Long) =
+            AtgeoClient(DEFAULT_SERVER, fake, budget, kotlinx.coroutines.test.StandardTestDispatcher(testScheduler), System::currentTimeMillis)
+
+        @Test
+        fun `a search over the latest search's tiles reuses their parsed records`() = runTest {
+            val client = client(setup())
+            val first = client.searchPlaces(region)
+            val second = client.searchPlaces(region, text = "Alpha")
+            assertSame(first.places.first { it.place["name"].stringOrNull() == "Alpha" }.place, second.places.first { it.place["name"].stringOrNull() == "Alpha" }.place)
+        }
+
+        @Test
+        fun `a tile cached before the latest search is parsed again from its body, to the same result`() = runTest {
+            val fake = setup()
+            val client = client(fake)
+            val first = client.searchPlaces(region)
+            client.searchPlaces(Region.Circle(lat = 10.0, lon = 10.0, radius = 1000.0), collection = "thing", dataset = "example.org")
+            val before = fake.requests.size
+            val again = client.searchPlaces(region)
+            assertEquals(before, fake.requests.size)
+            assertEquals(first, again)
+            assertNotSame(first.places.first().place, again.places.first().place)
+        }
+
+        @Test
+        fun `fetches a tile again once evicted, even though the latest search parsed it`() = runTest {
+            val fake = setup()
+            val client = budgeted(fake, budget = 1) // every tile evicts itself
+            val first = client.searchPlaces(region)
+            val tileRequests = fake.requests.count { "tiles.example" in it }
+            val second = client.searchPlaces(region)
+            assertEquals(2 * tileRequests, fake.requests.count { "tiles.example" in it })
+            assertEquals(first, second)
+        }
+
+        @Test
+        fun `getPlace finds a cached record by its uri when the place has no origin`() = runTest {
+            val uri = "https://example.org/r/1"
+            val fake = FakeServer(
+                tilesets = listOf(
+                    overture(
+                        listOf(
+                            FakeTile(
+                                tileUrl("a"),
+                                listOf(record(place("u", "By uri", listOf(point(37.772, -122.412)), mapOf("origin" to null)), uri = uri)),
+                            ),
+                        ),
+                    ),
+                ),
+            )
+            val client = client(fake)
+            client.searchPlaces(region)
+            client.searchPlaces(Region.Circle(lat = 10.0, lon = 10.0, radius = 1000.0))
+            fake.goOffline()
+            assertEquals("By uri", client.getPlace(uri).place["name"].stringOrNull())
+        }
+
+        @Test
+        fun `getPlace finds a place in a cached tile the latest search did not touch`() = runTest {
+            val fake = setup()
+            val client = client(fake)
+            client.searchPlaces(region)
+            client.searchPlaces(Region.Circle(lat = 10.0, lon = 10.0, radius = 1000.0), collection = "thing", dataset = "example.org")
+            fake.goOffline()
+            assertEquals("Shared in A", client.getPlace(placeOrigin("shared")).place["name"].stringOrNull())
+        }
+    }
+
     // The reference suite reaches the caches only through the client; these pin contract §10 directly.
     @Nested
     @DisplayName("TileCache (no reference counterpart)")
@@ -231,24 +302,25 @@ class CacheTest {
         }
 
         @Test
-        fun `find takes the record from the lowest URL and leaves recency alone`() {
+        fun `find takes the lowest URL holding the key and leaves recency alone`() {
             val cache = TileCache(1000)
             cache.set("https://t/b", entry(10, "x"))
             cache.set("https://t/a", entry(20, "x", "y"))
-            cache.set("https://t/c", entry(30, "x"))
+            cache.set("https://t/c", entry(30, "x", "w"))
             val before = cache.urls()
-            assertEquals("x@20", cache.find("x")?.value?.get("name")?.stringOrNull())
-            assertEquals("y@20", cache.find("y")?.value?.get("name")?.stringOrNull())
+            assertEquals("https://t/a", cache.find("x")?.first)
+            assertEquals("https://t/a", cache.find("y")?.first)
+            assertEquals("https://t/c", cache.find("w")?.first)
             assertNull(cache.find("z"))
             assertEquals(before, cache.urls())
         }
 
         @Test
-        fun `find matches by record key, falling back to uri`() {
+        fun `counts a fetched tile as the size of its body`() {
+            val body = """{"records":[]}""".toByteArray()
             val cache = TileCache(1000)
-            val byUri = TileRecord(JsonObject(emptyMap()), uri = "https://example.org/r/1")
-            cache.set("t", TileCache.Entry(listOf(byUri), 1))
-            assertSame(byUri, cache.find("https://example.org/r/1"))
+            cache.set("t", TileCache.Entry(body, emptySet()))
+            assertEquals(body.size.toLong(), cache.totalSize)
         }
     }
 

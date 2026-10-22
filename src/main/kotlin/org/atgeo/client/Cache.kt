@@ -1,10 +1,16 @@
 package org.atgeo.client
 
-// Neither cache is thread-safe on its own; AtgeoClient guards both with its Mutex.
+// None of these caches is thread-safe on its own; AtgeoClient guards them with its Mutex.
 
-/** In-memory LRU of parsed tiles, capped by total body size in bytes (contract §10). */
+/**
+ * In-memory LRU of tiles, capped by total body size in bytes (contract §10). It holds each tile's body
+ * as served, not its parsed records: parsed, a tile takes 5 to 7 times its body size on the heap (ART
+ * and HotSpot), so a full 50 MiB budget of parsed tiles would be 250 to 350 MB. [ParsedTiles] keeps the
+ * parsed form of the latest search's tiles only.
+ */
 internal class TileCache(private val budget: Long) {
-    class Entry(val records: List<TileRecord>, val size: Long)
+    /** A tile's body, and the keys (contract §4.6) of its usable records for the getPlace scan. */
+    class Entry(val body: ByteArray, val keys: Set<String>, val size: Long = body.size.toLong())
 
     // Access order: get() moves an entry to the end, so the eldest is least recently used.
     private val tiles = LinkedHashMap<String, Entry>(16, 0.75f, true)
@@ -27,17 +33,14 @@ internal class TileCache(private val budget: Long) {
     }
 
     /**
-     * The record whose key is `key`, from the lowest tile URL holding one. Iterating entries does not
+     * The lowest tile URL holding a record whose key is `key`, with its entry. Iterating entries does not
      * count as access, so recency is untouched (contract §9); get() would reorder mid-iteration.
      */
-    fun find(key: String): TileRecord? {
-        var bestUrl: String? = null
-        var best: TileRecord? = null
+    fun find(key: String): Pair<String, Entry>? {
+        var best: Pair<String, Entry>? = null
         for ((url, entry) in tiles) {
-            if (bestUrl != null && url >= bestUrl) continue
-            val record = entry.records.firstOrNull { recordKey(it) == key } ?: continue
-            bestUrl = url
-            best = record
+            if (best != null && url >= best.first) continue
+            if (key in entry.keys) best = url to entry
         }
         return best
     }
@@ -46,6 +49,22 @@ internal class TileCache(private val budget: Long) {
     fun urls(): List<String> = tiles.keys.toList()
 
     val totalSize: Long get() = total
+}
+
+/**
+ * The parsed records of the latest search's tiles, so that a search over the same tiles (the same
+ * region with new text, as a user types) parses nothing. A memo only: a tile is used only while
+ * [TileCache] still holds the same entry, so what is fetched, and when, is exactly as without it.
+ */
+internal class ParsedTiles {
+    private var tiles: Map<String, Pair<TileCache.Entry, List<TileRecord>>> = emptyMap()
+
+    fun get(url: String, entry: TileCache.Entry): List<TileRecord>? = tiles[url]?.takeIf { it.first === entry }?.second
+
+    /** Replaces the memo with one search's tiles. */
+    fun replace(tiles: Map<String, Pair<TileCache.Entry, List<TileRecord>>>) {
+        this.tiles = tiles
+    }
 }
 
 /** Entries fresh while `clock() < set + ttlMillis` (contract §10). `clock` is epoch milliseconds. */
