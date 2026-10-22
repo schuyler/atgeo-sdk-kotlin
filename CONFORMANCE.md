@@ -19,7 +19,7 @@ Coordinates that arrive as strings are parsed with Kotlin's `String.toDoubleOrNu
 
 ## JSON parsing
 
-`kotlinx.serialization`'s `Json.parseToJsonElement` accepts an unquoted literal such as `1.5f` or `yes` as a non-string primitive, where `JSON.parse` rejects the whole body. A body the reference refuses can therefore parse here.
+`kotlinx.serialization`'s `Json.parseToJsonElement` accepts an unquoted literal such as `1.5f` or `yes` as a non-string primitive, where `JSON.parse` rejects the whole body. A body the reference refuses can therefore parse here. Inside an object such a value is just a wrong-typed field and reads as absent; a whole body that is one such token (`<html>`, `yes`) parses as a lone primitive, which every reader rejects for not being an object, so the call fails with `SerializationException` exactly as for a body that does not parse.
 
 ## Ordering a NaN distance (contract §8)
 
