@@ -120,7 +120,7 @@ A tileset's collections, attribution and extent. Not cached. The describe types 
 - `AtgeoException` has the server's error `code` (`PlaceNotFound`, `BboxTooLarge`, `DatasetNotFound` and so on), or `HttpError` when the server didn't send one.
 - `searchPlaces` throws `IllegalArgumentException` for an invalid region or for `SIMILARITY` without text, before any request.
 - A failed `getTiles` fails the search. A failed tile does not: it's skipped, counted in `tiles.failed`, and `complete` is `false`.
-- A 2xx body with nothing usable in it throws `kotlinx.serialization.SerializationException`. Network errors come through as whatever the transport throws, usually `IOException`.
+- A 2xx body with nothing usable in it throws `kotlinx.serialization.SerializationException`. Network errors come through as whatever the transport throws, usually `IOException`. A transport that gives up by throwing `CancellationException` while your coroutine is still running (its own `withTimeout`, say) is reported as `SocketTimeoutException`, or as `IOException` for anything but a timeout, so that it can't end your coroutine silently.
 - Cancelling the calling coroutine stops the search and throws `CancellationException`.
 
 ## Privacy

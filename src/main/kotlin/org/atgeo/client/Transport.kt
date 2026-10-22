@@ -1,11 +1,17 @@
 package org.atgeo.client
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.asExecutor
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import java.io.IOException
 import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
 import java.net.URL
 import java.net.URLEncoder
 import java.util.concurrent.atomic.AtomicReference
@@ -102,7 +108,15 @@ internal class Xrpc(server: String, private val transport: HttpTransport) {
 
     /** The body of a 2xx answer to a GET of `url` exactly as given; AtgeoException otherwise. */
     suspend fun get(url: String): ByteArray {
-        val response = transport.get(url)
+        val response = try {
+            transport.get(url)
+        } catch (e: CancellationException) {
+            // The caller's own cancellation propagates. Anything else is the transport giving up, such
+            // as its withTimeout, and is a network failure (contract §14): left as a
+            // CancellationException it would end the caller's coroutine silently.
+            currentCoroutineContext().ensureActive()
+            throw if (e is TimeoutCancellationException) SocketTimeoutException(e.message).apply { initCause(e) } else IOException(e.message, e)
+        }
         if (response.status !in 200..299) throw atgeoException(response.status, response.body)
         return response.body
     }
