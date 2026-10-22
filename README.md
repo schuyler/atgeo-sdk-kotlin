@@ -64,7 +64,7 @@ Make one per server and share it; it's thread-safe, and its caches are what make
 
 ### Transports
 
-`HttpTransport` is one function, `suspend fun get(url: String): HttpResponse`, so a test or an app with its own HTTP stack can pass a lambda. The default, `HttpUrlConnectionTransport`, needs nothing, but on the JDK a cancelled request keeps its socket reading until the body ends or the read timeout (30 seconds by default) fires; your coroutine is released at once either way. If your app cancels a lot (a search per keystroke, say) or already ships OkHttp, copy [`OkHttpTransport.kt`](android-sample/app/src/main/kotlin/org/atgeo/sample/OkHttpTransport.kt) from the sample app. It is short, and it cancels on the wire.
+`HttpTransport` is one function, `suspend fun get(url: String): HttpResponse`, so a test or an app with its own HTTP stack can pass a lambda. The default, `HttpUrlConnectionTransport`, needs nothing and asks for gzip (tiles are about a tenth the size), but on the JDK a cancelled request keeps its socket reading until the body ends or the read timeout (30 seconds by default) fires; your coroutine is released at once either way. If your app cancels a lot (a search per keystroke, say) or already ships OkHttp, copy [`OkHttpTransport.kt`](android-sample/app/src/main/kotlin/org/atgeo/sample/OkHttpTransport.kt) from the sample app. It is short, and it cancels on the wire.
 
 Whatever transport you use, don't give it a disk cache, or the client's promise to keep nothing on disk goes with it.
 
@@ -74,7 +74,7 @@ Whatever transport you use, don't give it a disk cache, or the client's promise 
 
 | Parameter | Meaning |
 |---|---|
-| `region` | Required. `Region.Circle(lat, lon, radius)` with the radius in metres, or `Region.Bbox(minLon, minLat, maxLon, maxLat)` in degrees. A bbox with `minLon > maxLon` crosses the antimeridian. |
+| `region` | Required. `Region.Circle(lat, lon, radius)` with the radius in metres, or `Region.Bbox(minLon, minLat, maxLon, maxLat)` in degrees. Note the order: a circle is latitude first, a box longitude first (GeoJSON's order), so name the arguments. A bbox with `minLon > maxLon` crosses the antimeridian. |
 | `text` | Optional search text, matched fuzzily against each place's `name` and its `variants[].name` after lowercasing and stripping accents and extra whitespace. Places scoring below 0.6 are dropped. |
 | `dataset` | Optional, such as `openstreetmap.org`. Defaults to `overturemaps.org`. |
 | `collection` | Optional, such as `way`. |
@@ -120,8 +120,10 @@ A tileset's collections, attribution and extent. Not cached. The describe types 
 - `AtgeoException` has the server's error `code` (`PlaceNotFound`, `BboxTooLarge`, `DatasetNotFound` and so on), or `HttpError` when the server didn't send one.
 - `searchPlaces` throws `IllegalArgumentException` for an invalid region or for `SIMILARITY` without text, before any request.
 - A failed `getTiles` fails the search. A failed tile does not: it's skipped, counted in `tiles.failed`, and `complete` is `false`.
-- A 2xx body with nothing usable in it throws `kotlinx.serialization.SerializationException`. Network errors come through as whatever the transport throws, usually `IOException`.
+- A 2xx body with nothing usable in it throws `kotlinx.serialization.SerializationException`. Network errors come through as whatever the transport throws, usually `IOException`. A transport that gives up by throwing `CancellationException` while your coroutine is still running (its own `withTimeout`, say) is reported as `SocketTimeoutException`, or as `IOException` for anything but a timeout, so that it can't end your coroutine silently.
 - Cancelling the calling coroutine stops the search and throws `CancellationException`.
+
+`SerializationException` is a subclass of `IllegalArgumentException`, so a `catch (e: IllegalArgumentException)` meant for a bad region also catches a garbled server answer. Catch `SerializationException` first if you tell the two apart. And as anywhere in coroutines, don't let a `catch (e: Exception)` swallow `CancellationException`; rethrow it.
 
 ## Privacy
 

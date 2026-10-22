@@ -2,6 +2,7 @@ package org.atgeo.client
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
@@ -10,13 +11,19 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.Test
+import java.io.IOException
+import java.net.SocketTimeoutException
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.test.assertFailsWith
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 private val region = Region.Bbox(-122.42, 37.77, -122.41, 37.78)
 private val inside = point(37.775, -122.415)
+
+// Stack-trace recovery (on under -ea) may rethrow a copy whose cause is the original, so look down the chain.
+private fun causes(e: Throwable) = generateSequence(e) { it.cause }
 
 private fun manyTiles(n: Int) = FakeServer(
     tilesets = listOf(overture((0 until n).map { i -> FakeTile(tileUrl("t%02d".format(i)), listOf(record(place("p$i", "P$i", listOf(inside))))) })),
@@ -85,5 +92,46 @@ class ConcurrencyTest {
         assertEquals(SearchResult.TileCounts(fetched = 1, failed = 8), result.tiles)
         assertEquals(false, result.complete)
         assertEquals(listOf(placeOrigin("p8")), result.places.map { it.origin })
+    }
+
+    // Outside the tile loop the same exception would reach the caller as a CancellationException
+    // while the caller is still active, which ends a launch {} silently. It is a network failure.
+    @Test
+    fun `reports a transport timeout on an XRPC call as SocketTimeoutException`() = runTest {
+        val c = client(HttpTransport { withTimeout(10) { awaitCancellation() } })
+        val calls: List<suspend () -> Unit> = listOf(
+            { c.searchPlaces(region) },
+            { c.getPlace(placeOrigin("p0")) },
+            { c.describeService() },
+            { c.describeTileset("overture-place") },
+        )
+        for (call in calls) {
+            val error = assertFailsWith<SocketTimeoutException> { call() }
+            assertTrue(causes(error).any { it is TimeoutCancellationException })
+        }
+    }
+
+    @Test
+    fun `reports any other transport CancellationException as IOException`() = runTest {
+        val error = assertFailsWith<IOException> { client(HttpTransport { throw CancellationException("gave up") }).searchPlaces(region) }
+        assertTrue(causes(error).any { it is CancellationException })
+    }
+
+    @Test
+    fun `still propagates the caller's cancellation from getTiles`() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val client = AtgeoClient(transport = { started.complete(Unit); awaitCancellation() }, computeDispatcher = Dispatchers.Default)
+        val search = async(Dispatchers.Default) { client.searchPlaces(region) }
+        withTimeout(5_000) { started.await() }
+        search.cancel()
+        assertIs<CancellationException>(runCatching { search.await() }.exceptionOrNull())
+        assertTrue(search.isCancelled)
+    }
+
+    @Test
+    fun `lets an Error from a tile fetch fail the search rather than count as a failed tile`() = runTest {
+        val server = manyTiles(2)
+        val transport = HttpTransport { url -> if (url == tileUrl("t01")) throw OutOfMemoryError("probe") else server.get(url) }
+        assertFailsWith<OutOfMemoryError> { client(transport).searchPlaces(region) }
     }
 }

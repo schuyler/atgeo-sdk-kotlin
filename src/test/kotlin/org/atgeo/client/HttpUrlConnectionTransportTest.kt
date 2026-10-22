@@ -16,6 +16,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.zip.GZIPOutputStream
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -61,6 +62,24 @@ class HttpUrlConnectionTransportTest {
             runCatching { exchange.responseBody.use { it.write("]}".toByteArray()) } }
             exchange.close()
         }
+        // Gzips only when asked, as places.atgeo.org does.
+        server.createContext("/negotiated") { exchange ->
+            val body = """{"records":[]}""".toByteArray()
+            if (exchange.requestHeaders.getFirst("Accept-Encoding").orEmpty().contains("gzip")) {
+                val packed = java.io.ByteArrayOutputStream().also { out -> GZIPOutputStream(out).use { it.write(body) } }.toByteArray()
+                exchange.responseHeaders.add("Content-Encoding", "gzip")
+                exchange.sendResponseHeaders(200, packed.size.toLong())
+                exchange.responseBody.use { it.write(packed) }
+            } else {
+                exchange.sendResponseHeaders(200, body.size.toLong())
+                exchange.responseBody.use { it.write(body) }
+            }
+            exchange.close()
+        }
+        server.createContext("/gzip-empty") {
+            it.responseHeaders.add("Content-Encoding", "gzip")
+            it.respond(404, null)
+        }
         server.createContext("/headers") { exchange ->
             seenHeaders.add(exchange.requestHeaders.mapKeys { it.key.lowercase() })
             exchange.respond(200, "{}")
@@ -96,6 +115,20 @@ class HttpUrlConnectionTransportTest {
         assertContentEquals("""{"ok":true}""".toByteArray(), response.body)
     }
 
+    @Test
+    fun `asks for gzip and decodes a gzipped body`() = runBlocking {
+        val response = transport.get("$base/negotiated")
+        assertEquals(200, response.status)
+        assertContentEquals("""{"records":[]}""".toByteArray(), response.body)
+    }
+
+    @Test
+    fun `reads an empty body labelled gzip as empty`() = runBlocking {
+        val response = transport.get("$base/gzip-empty")
+        assertEquals(404, response.status)
+        assertContentEquals(ByteArray(0), response.body)
+    }
+
     // On the JDK, disconnect() does not interrupt a body read already in progress, so this asserts
     // that the caller returns promptly, not that the socket closes (spec §4).
     @Test
@@ -112,7 +145,7 @@ class HttpUrlConnectionTransportTest {
     }
 
     // Privacy (contract §12): the transport adds only fixed headers of its own, the same on every request.
-    // useCaches = false makes the JDK add Pragma and Cache-Control (both "no-cache").
+    // useCaches = false makes the JDK add Pragma and Cache-Control (both "no-cache"); Accept-Encoding is always gzip.
     @Test
     fun `sends a fixed set of headers, Accept application-json among them, identical across requests`() = runBlocking {
         transport.get("$base/headers/a?bbox=1.00,2.00,3.00,4.00")
@@ -121,7 +154,8 @@ class HttpUrlConnectionTransportTest {
         val (first, second) = seenHeaders
         assertEquals(first, second)
         assertEquals(listOf("application/json"), first["accept"])
-        val allowed = setOf("accept", "user-agent", "host", "connection", "pragma", "cache-control")
+        assertEquals(listOf("gzip"), first["accept-encoding"])
+        val allowed = setOf("accept", "accept-encoding", "user-agent", "host", "connection", "pragma", "cache-control")
         assertTrue(allowed.containsAll(first.keys), "unexpected request headers: ${first.keys - allowed}")
     }
 }

@@ -57,6 +57,12 @@ internal class TtlCache<T : Any>(private val ttlMillis: Long, private val clock:
     fun get(key: String): T? = entries[key]?.takeIf { clock() < it.expires }?.value
 
     fun set(key: String, value: T) {
-        entries[key] = Entry(value, clock() + ttlMillis)
+        val now = clock()
+        // Every new search box is a new key, so without pruning a long-lived client only grows (contract §14).
+        entries.values.removeAll { now >= it.expires }
+        entries[key] = Entry(value, now + ttlMillis)
     }
+
+    /** Entries held, fresh or not. For tests. */
+    val size: Int get() = entries.size
 }

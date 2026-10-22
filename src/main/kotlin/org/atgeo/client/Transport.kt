@@ -1,14 +1,21 @@
 package org.atgeo.client
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.asExecutor
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import java.io.IOException
 import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
 import java.net.URL
 import java.net.URLEncoder
 import java.util.concurrent.atomic.AtomicReference
+import java.util.zip.GZIPInputStream
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -32,7 +39,8 @@ public class AtgeoException(public val code: String, message: String) : RuntimeE
 
 /**
  * The default transport: `java.net.HttpURLConnection`, on every JVM and Android version with no
- * dependency. Cancelling the caller returns at once; on the JDK the socket may keep reading a body
+ * dependency. It asks for gzip and decodes it, which the JDK does not do on its own. Cancelling the
+ * caller returns at once; on the JDK the socket may keep reading a body
  * already in progress until it ends or `readTimeoutMillis` passes, because `disconnect()` does not
  * interrupt that read. Apps that cancel often should supply a transport that tears requests down on
  * the wire, such as OkHttp's (android-sample/ has one).
@@ -63,11 +71,17 @@ public class HttpUrlConnectionTransport(
                 connection.readTimeout = readTimeoutMillis
                 connection.useCaches = false
                 connection.setRequestProperty("Accept", "application/json")
+                // The JDK never asks for gzip, and tiles are about 10x smaller with it. Asking
+                // explicitly turns off Android's transparent decoding, so decode here on both.
+                connection.setRequestProperty("Accept-Encoding", "gzip")
                 // responseCode selects the stream: getInputStream() throws on a 404, and errorStream
                 // is null for an empty error body.
                 val status = connection.responseCode
                 val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-                val body = stream?.use { it.readBytes() } ?: ByteArray(0)
+                val raw = stream?.use { it.readBytes() } ?: ByteArray(0)
+                // An empty body has no gzip header to read, whatever Content-Encoding says.
+                val gzipped = connection.contentEncoding.equals("gzip", ignoreCase = true) && raw.isNotEmpty()
+                val body = if (gzipped) GZIPInputStream(raw.inputStream()).use { it.readBytes() } else raw
                 cont.resume(HttpResponse(status, body))
             } catch (t: Throwable) {
                 cont.resumeWithException(t)
@@ -95,7 +109,15 @@ internal class Xrpc(server: String, private val transport: HttpTransport) {
 
     /** The body of a 2xx answer to a GET of `url` exactly as given; AtgeoException otherwise. */
     suspend fun get(url: String): ByteArray {
-        val response = transport.get(url)
+        val response = try {
+            transport.get(url)
+        } catch (e: CancellationException) {
+            // The caller's own cancellation propagates. Anything else is the transport giving up, such
+            // as its withTimeout, and is a network failure (contract §14): left as a
+            // CancellationException it would end the caller's coroutine silently.
+            currentCoroutineContext().ensureActive()
+            throw if (e is TimeoutCancellationException) SocketTimeoutException(e.message).apply { initCause(e) } else IOException(e.message, e)
+        }
         if (response.status !in 200..299) throw atgeoException(response.status, response.body)
         return response.body
     }
