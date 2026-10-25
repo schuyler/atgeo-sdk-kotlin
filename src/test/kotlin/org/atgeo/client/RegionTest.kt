@@ -19,7 +19,7 @@ private fun bbox(minLon: Double, minLat: Double, maxLon: Double, maxLat: Double)
 
 private suspend fun TestScope.emitted(region: Region): List<String> {
     val server = FakeServer()
-    client(server).searchPlaces(region)
+    client(server).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
     return server.requests.filter { "org.atgeo.getTiles" in it }.map { paramsOf(it)["bbox"].orEmpty() }
 }
 
@@ -30,6 +30,37 @@ private fun assertCloseTo(expected: Double, actual: Double, digits: Int) =
     assertTrue(abs(actual - expected) < Math.pow(10.0, -digits.toDouble()) / 2, "expected $expected, got $actual")
 
 class RegionTest {
+    // Contract §3 and the port spec: the box's fields are named for the compass sides, in the order of the wire string.
+    @Nested
+    @DisplayName("bbox field names")
+    inner class BboxNames {
+        @Test
+        fun `a bbox names its sides west, south, east and north, in wire order`() {
+            val box = Region.Bbox(west = 1.0, south = 2.0, east = 3.0, north = 4.0)
+            assertEquals(Region.Bbox(1.0, 2.0, 3.0, 4.0), box)
+            assertEquals(listOf(1.0, 2.0, 3.0, 4.0), listOf(box.west, box.south, box.east, box.north))
+            val (west, south, east, north) = box
+            assertEquals(listOf(1.0, 2.0, 3.0, 4.0), listOf(west, south, east, north))
+        }
+
+        @Test
+        fun `sends west, south, east, north in that order`() = runTest {
+            val server = FakeServer()
+            client(server).searchPlaces(Region.Bbox(west = -122.42, south = 37.77, east = -122.41, north = 37.78), OVERTURE_DATASET)
+            assertEquals("-122.42,37.77,-122.41,37.78", paramsOf(server.requests.single { "getTiles" in it }).getValue("bbox"))
+        }
+
+        @Test
+        fun `reads west greater than east as crossing the antimeridian`() = runTest {
+            val server = FakeServer()
+            client(server).searchPlaces(Region.Bbox(west = 170.0, south = 10.0, east = -170.0, north = 20.0), OVERTURE_DATASET)
+            assertEquals(
+                listOf("170.00,10.00,180.00,20.00", "-180.00,10.00,-170.00,20.00"),
+                server.requests.filter { "getTiles" in it }.map { paramsOf(it).getValue("bbox") },
+            )
+        }
+    }
+
     @Nested
     @DisplayName("coordinate serialization")
     inner class CoordinateSerialization {
@@ -245,7 +276,7 @@ class RegionTest {
                 ),
                 tilesFor = { b -> TilesAnswer.Urls(listOf(if (b.startsWith("170")) west else east)) },
             )
-            val result = client(server).searchPlaces(bbox(170.0, 10.0, -170.0, 20.0))
+            val result = client(server).searchPlaces(bbox(170.0, 10.0, -170.0, 20.0), OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(listOf(placeOrigin("e"), placeOrigin("w")), result.places.map { it.origin!! }.sorted())
             assertEquals(true, result.complete)
         }
@@ -280,7 +311,7 @@ class RegionTest {
             dynamicTest("throws IllegalArgumentException before any request: $name") {
                 runTest {
                     val server = FakeServer()
-                    assertFailsWith<IllegalArgumentException> { client(server).searchPlaces(region) }
+                    assertFailsWith<IllegalArgumentException> { client(server).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION) }
                     assertEquals(0, server.requests.size)
                 }
             }
@@ -288,13 +319,13 @@ class RegionTest {
 
         @Test
         fun `accepts minLon greater than maxLon`() = runTest {
-            client(FakeServer()).searchPlaces(bbox(170.0, 0.0, -170.0, 1.0))
+            client(FakeServer()).searchPlaces(bbox(170.0, 0.0, -170.0, 1.0), OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
         }
 
         @Test
         fun `throws IllegalArgumentException before any request for similarity sort without text`() = runTest {
             val server = FakeServer()
-            assertFailsWith<IllegalArgumentException> { client(server).searchPlaces(bbox(0.0, 0.0, 1.0, 1.0), sort = SortMode.SIMILARITY) }
+            assertFailsWith<IllegalArgumentException> { client(server).searchPlaces(bbox(0.0, 0.0, 1.0, 1.0), OVERTURE_DATASET, sort = SortMode.SIMILARITY, collection = OVERTURE_COLLECTION) }
             assertEquals(0, server.requests.size)
         }
 
@@ -302,7 +333,7 @@ class RegionTest {
         @Test
         fun `checks the region before the sort (no reference counterpart)`() = runTest {
             val error = assertFailsWith<IllegalArgumentException> {
-                client(FakeServer()).searchPlaces(Region.Circle(Double.NaN, 0.0, 1.0), sort = SortMode.SIMILARITY)
+                client(FakeServer()).searchPlaces(Region.Circle(Double.NaN, 0.0, 1.0), OVERTURE_DATASET, sort = SortMode.SIMILARITY, collection = OVERTURE_COLLECTION)
             }
             assertEquals("invalid circle", error.message)
         }

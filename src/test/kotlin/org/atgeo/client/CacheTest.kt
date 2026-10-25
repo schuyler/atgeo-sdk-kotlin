@@ -57,9 +57,9 @@ class CacheTest {
         fun `answers an identical second search offline`() = runTest {
             val fake = setup()
             val client = client(fake)
-            val first = client.searchPlaces(region, text = "Alpha")
+            val first = client.searchPlaces(region, OVERTURE_DATASET, text = "Alpha", collection = OVERTURE_COLLECTION)
             fake.goOffline()
-            val second = client.searchPlaces(region, text = "Alpha")
+            val second = client.searchPlaces(region, OVERTURE_DATASET, text = "Alpha", collection = OVERTURE_COLLECTION)
             assertEquals(first, second)
             assertTrue(first.places.isNotEmpty())
         }
@@ -68,9 +68,9 @@ class CacheTest {
         fun `reuses tiles for a different text over the same region`() = runTest {
             val fake = setup()
             val client = client(fake)
-            client.searchPlaces(region)
+            client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             val before = fake.requests.size
-            client.searchPlaces(region, text = "Alpha")
+            client.searchPlaces(region, OVERTURE_DATASET, text = "Alpha", collection = OVERTURE_COLLECTION)
             assertEquals(before, fake.requests.size)
         }
 
@@ -78,9 +78,66 @@ class CacheTest {
         fun `makes no tile request for a repeated search`() = runTest {
             val fake = setup()
             val client = client(fake)
-            client.searchPlaces(region)
-            client.searchPlaces(region)
+            client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(1, fake.requests.count { it == tileUrl("a") })
+        }
+    }
+
+    @Nested
+    @DisplayName("attribution in the tile cache")
+    inner class AttributionInTheTileCache {
+        private val overturePlace = Attribution("overturemaps.org", "place")
+
+        @Test
+        fun `gives a warm offline search the same, non-empty attribution and hit collections`() = runTest {
+            val fake = setup()
+            val client = client(fake)
+            val first = client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            assertTrue(first.attribution.isNotEmpty())
+            assertTrue(first.places.isNotEmpty())
+            for (hit in first.places) assertEquals(CollectionKey("overturemaps.org", "place"), hit.collection)
+            fake.goOffline()
+            val second = client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            assertEquals(first.attribution, second.attribution)
+            assertEquals(first.places.map { it.collection }, second.places.map { it.collection })
+        }
+
+        @Test
+        fun `builds a search's attribution only from its own tiles, though another tile is still cached`() = runTest {
+            val entryA = collectionOf("ref-a.example", "c")
+            val entryB = collectionOf("ref-b.example", "c")
+            val fake = FakeServer(
+                tilesets = listOf(
+                    overture(listOf(FakeTile(tileUrl("a"), listOf(record(place("pa", "A", listOf(point(37.775, -122.415)))))))).copy(references = listOf(entryA)),
+                    FakeTileset(
+                        slug = "overture-place-b",
+                        collections = listOf(collectionOf("overturemaps.org", "place")),
+                        references = listOf(entryB),
+                        tiles = listOf(FakeTile(tileUrl("b"), listOf(record(place("pb", "B", listOf(point(10.55, -100.45))))))),
+                    ),
+                ),
+                tilesFor = { bbox -> TilesAnswer.Urls(listOf(if (bbox.startsWith("-122")) tileUrl("a") else tileUrl("b"))) },
+            )
+            val client = client(fake)
+            val a = client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            val b = client.searchPlaces(Region.Bbox(-100.5, 10.5, -100.4, 10.6), OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            assertEquals(listOf(overturePlace, Attribution("ref-a.example", "c")), a.attribution)
+            assertEquals(listOf(overturePlace, Attribution("ref-b.example", "c")), b.attribution)
+        }
+
+        @Test
+        fun `keeps the attribution of a tile that is parsed again from its body`() = runTest {
+            val fake = setup()
+            val client = client(fake)
+            val first = client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            // Another search replaces the parsed memo, so the first search's tile comes back from its cached body.
+            client.searchPlaces(Region.Circle(lat = 10.0, lon = 10.0, radius = 1000.0), "example.org", collection = "thing")
+            fake.goOffline()
+            val again = client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            assertEquals(listOf(overturePlace), again.attribution)
+            assertEquals(first.attribution, again.attribution)
+            assertEquals(CollectionKey("overturemaps.org", "place"), again.places.first().collection)
         }
     }
 
@@ -92,15 +149,15 @@ class CacheTest {
             var now = MIDNIGHT
             val fake = setup()
             val client = client(fake, clock = { now })
-            client.searchPlaces(region)
+            client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             val base = fake.requests.size
 
             now = MIDNIGHT + 3_599_000 // 00:59:59
-            client.searchPlaces(region)
+            client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(base, fake.requests.size)
 
             now = MIDNIGHT + 3_601_000 // 01:00:01
-            client.searchPlaces(region)
+            client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(2, tileListCount(fake.requests))
             assertEquals(1, fake.requests.count { it == tileUrl("a") })
         }
@@ -110,10 +167,10 @@ class CacheTest {
             var now = MIDNIGHT
             val fake = setup()
             val client = client(fake, clock = { now })
-            client.searchPlaces(region)
+            client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             fake.goOffline()
             now = MIDNIGHT + 3_601_000
-            assertFails { client.searchPlaces(region) }
+            assertFails { client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION) }
         }
 
         @Test
@@ -138,18 +195,21 @@ class CacheTest {
         fun `answers from an already-fetched tile without a request`() = runTest {
             val fake = setup()
             val client = client(fake)
-            client.searchPlaces(region)
+            client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             val before = fake.requests.size
             val found = client.getPlace(placeOrigin("a"))
             assertEquals(before, fake.requests.size)
-            assertEquals(PlaceRecord(placeOrigin("a"), place("a", "Alpha", listOf(point(37.772, -122.412))), 3), found)
+            assertEquals(
+                PlaceRecord(placeOrigin("a"), place("a", "Alpha", listOf(point(37.772, -122.412))), 3, listOf(Attribution("overturemaps.org", "place"))),
+                found,
+            )
         }
 
         @Test
         fun `answers offline for a cached origin`() = runTest {
             val fake = setup()
             val client = client(fake)
-            client.searchPlaces(region)
+            client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             fake.goOffline()
             assertEquals("Shared in A", client.getPlace(placeOrigin("shared")).place["name"].stringOrNull())
         }
@@ -158,13 +218,52 @@ class CacheTest {
         fun `matches the whole origin, not a shared id`() = runTest {
             val fake = setup()
             val client = client(fake)
-            client.searchPlaces(region)
+            client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             val before = fake.requests.size
             val found = client.getPlace(OTHER_ORIGIN)
             val getPlaces = fake.requests.drop(before).filter { endpointOf(it).endsWith("/xrpc/org.atgeo.getPlace") }
             assertEquals(1, getPlaces.size)
             assertEquals(OTHER_ORIGIN, paramsOf(getPlaces[0])["uri"])
             assertEquals("Shared in other", found.place["name"].stringOrNull())
+        }
+
+        @Test
+        fun `takes the attribution of the lowest-URL tile, as served, though higher ones were cached before and after it`() = runTest {
+            val references = listOf(
+                collectionOf("z.example", "c"),
+                collectionOf("a.example", "c", "release" to JsonPrimitive("1")),
+                collectionOf("a.example", "c", "release" to JsonPrimitive("2")),
+            )
+            fun copy() = record(place("x", "Copy", listOf(point(37.775, -122.415))))
+            val fake = FakeServer(
+                tilesets = listOf(
+                    overture(listOf(FakeTile(tileUrl("a"), listOf(copy())))).copy(references = references),
+                    FakeTileset(
+                        "overture-place-b", listOf(collectionOf("overturemaps.org", "place")), listOf(collectionOf("b.example", "c")),
+                        tiles = listOf(FakeTile(tileUrl("b"), listOf(copy()))),
+                    ),
+                    FakeTileset(
+                        "overture-place-c", listOf(collectionOf("overturemaps.org", "place")), listOf(collectionOf("c.example", "c")),
+                        tiles = listOf(FakeTile(tileUrl("c"), listOf(copy()))),
+                    ),
+                ),
+                tilesFor = { bbox -> TilesAnswer.Urls(listOf(if (bbox.startsWith("-122")) tileUrl("a") else if (bbox.startsWith("-100")) tileUrl("b") else tileUrl("c"))) },
+            )
+            val client = client(fake)
+            // b, then a, then c: the lowest URL is neither the first nor the last cached.
+            client.searchPlaces(Region.Bbox(-100.5, 10.5, -100.4, 10.6), OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            client.searchPlaces(Region.Bbox(-90.5, 10.5, -90.4, 10.6), OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            fake.goOffline()
+            assertEquals(
+                listOf(
+                    Attribution("overturemaps.org", "place"),
+                    Attribution("z.example", "c"),
+                    Attribution("a.example", "c", release = "1"),
+                    Attribution("a.example", "c", release = "2"),
+                ),
+                client.getPlace(placeOrigin("x")).attribution,
+            )
         }
 
         @Test
@@ -175,9 +274,9 @@ class CacheTest {
                 tilesFor = { bbox -> TilesAnswer.Urls(listOf(if (bbox.startsWith("-122")) tileUrl("a") else tileUrl("b"))) },
             )
             val client = client(fake)
-            client.searchPlaces(Region.Bbox(-100.5, 10.5, -100.4, 10.6))
+            client.searchPlaces(Region.Bbox(-100.5, 10.5, -100.4, 10.6), OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals("Copy B", client.getPlace(placeOrigin("x")).place["name"].stringOrNull())
-            client.searchPlaces(region)
+            client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             fake.goOffline()
             assertEquals("Copy A", client.getPlace(placeOrigin("x")).place["name"].stringOrNull())
         }
@@ -194,8 +293,8 @@ class CacheTest {
         @Test
         fun `a search over the latest search's tiles reuses their parsed records`() = runTest {
             val client = client(setup())
-            val first = client.searchPlaces(region)
-            val second = client.searchPlaces(region, text = "Alpha")
+            val first = client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            val second = client.searchPlaces(region, OVERTURE_DATASET, text = "Alpha", collection = OVERTURE_COLLECTION)
             assertSame(first.places.first { it.place["name"].stringOrNull() == "Alpha" }.place, second.places.first { it.place["name"].stringOrNull() == "Alpha" }.place)
         }
 
@@ -203,10 +302,10 @@ class CacheTest {
         fun `a tile cached before the latest search is parsed again from its body, to the same result`() = runTest {
             val fake = setup()
             val client = client(fake)
-            val first = client.searchPlaces(region)
+            val first = client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             client.searchPlaces(Region.Circle(lat = 10.0, lon = 10.0, radius = 1000.0), collection = "thing", dataset = "example.org")
             val before = fake.requests.size
-            val again = client.searchPlaces(region)
+            val again = client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(before, fake.requests.size)
             assertEquals(first, again)
             assertNotSame(first.places.first().place, again.places.first().place)
@@ -216,9 +315,9 @@ class CacheTest {
         fun `fetches a tile again once evicted, even though the latest search parsed it`() = runTest {
             val fake = setup()
             val client = budgeted(fake, budget = 1) // every tile evicts itself
-            val first = client.searchPlaces(region)
+            val first = client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             val tileRequests = fake.requests.count { "tiles.example" in it }
-            val second = client.searchPlaces(region)
+            val second = client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(2 * tileRequests, fake.requests.count { "tiles.example" in it })
             assertEquals(first, second)
         }
@@ -239,8 +338,8 @@ class CacheTest {
                 ),
             )
             val client = client(fake)
-            client.searchPlaces(region)
-            client.searchPlaces(Region.Circle(lat = 10.0, lon = 10.0, radius = 1000.0))
+            client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            client.searchPlaces(Region.Circle(lat = 10.0, lon = 10.0, radius = 1000.0), OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             fake.goOffline()
             assertEquals("By uri", client.getPlace(uri).place["name"].stringOrNull())
         }
@@ -249,10 +348,12 @@ class CacheTest {
         fun `getPlace finds a place in a cached tile the latest search did not touch`() = runTest {
             val fake = setup()
             val client = client(fake)
-            client.searchPlaces(region)
+            client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             client.searchPlaces(Region.Circle(lat = 10.0, lon = 10.0, radius = 1000.0), collection = "thing", dataset = "example.org")
             fake.goOffline()
-            assertEquals("Shared in A", client.getPlace(placeOrigin("shared")).place["name"].stringOrNull())
+            val found = client.getPlace(placeOrigin("shared"))
+            assertEquals("Shared in A", found.place["name"].stringOrNull())
+            assertEquals(listOf(Attribution("overturemaps.org", "place")), found.attribution)
         }
     }
 

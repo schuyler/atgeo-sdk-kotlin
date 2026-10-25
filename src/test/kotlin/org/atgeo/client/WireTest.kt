@@ -72,7 +72,7 @@ class WireTest {
         fun `keeps value, uri and importance and nothing else`() {
             val records = readTilePayload(
                 json("""{"publishedAt": "x", "records": [{"value": {"b": 1, "a": {"z": [2.50]}}, "uri": "u", "importance": 3, "extra": 4}]}"""),
-            )
+            ).records
             assertEquals(listOf(TileRecord(json("""{"b": 1, "a": {"z": [2.50]}}""") as JsonObject, "u", 3)), records)
             assertEquals(listOf("b", "a"), records.single().value.keys.toList())
             assertEquals("2.50", ((records.single().value["a"] as JsonObject)["z"] as kotlinx.serialization.json.JsonArray)[0].toString())
@@ -82,7 +82,7 @@ class WireTest {
         fun `skips records that are not objects or have no object value, and keeps the tile`() {
             val records = readTilePayload(
                 json("""{"records": [7, "s", [1], null, {"value": null}, {}, {"value": 5}, {"value": {"name": "ok"}}]}"""),
-            )
+            ).records
             assertEquals(listOf("ok"), records.map { it.value["name"].stringOrNull() })
         }
 
@@ -90,8 +90,39 @@ class WireTest {
         fun `reads a wrong-typed uri or importance as absent`() {
             val records = readTilePayload(
                 json("""{"records": [{"value": {}, "uri": {}, "importance": "7"}, {"value": {}, "uri": 9, "importance": [1]}]}"""),
-            )
+            ).records
             assertEquals(listOf(TileRecord(JsonObject(emptyMap())), TileRecord(JsonObject(emptyMap()))), records)
+        }
+
+        @Test
+        fun `keeps the attribution entries that name a dataset and a collection, in served order, duplicates included`() {
+            val payload = readTilePayload(
+                json(
+                    """{"records": [], "attribution": [null, 5, "x", [], {}, {"dataset": "d"}, {"collection": "c"}, {"dataset": 1, "collection": "c"},
+                        {"dataset": "z", "collection": "c", "release": "r", "source": "s", "licenses": ["l", 1, null], "attribution": "a", "extra": 1},
+                        {"dataset": "a", "collection": "c", "release": 5, "licenses": "l"}, {"dataset": "z", "collection": "c"}]}""",
+                ),
+            )
+            assertEquals(
+                listOf(
+                    Attribution("z", "c", release = "r", source = "s", licenses = listOf("l"), attribution = "a"),
+                    Attribution("a", "c"),
+                    Attribution("z", "c"),
+                ),
+                payload.attribution,
+            )
+        }
+
+        @TestFactory
+        fun `leaves the attribution absent unless it is an array`(): List<DynamicTest> =
+            listOf("""{"records": []}""", """{"records": [], "attribution": null}""", """{"records": [], "attribution": {}}""",
+                """{"records": [], "attribution": "x"}""", """{"records": [], "attribution": 5}""").map { text ->
+                dynamicTest(text) { assertNull(readTilePayload(json(text)).attribution) }
+            }
+
+        @Test
+        fun `reads an empty attribution array as an empty list, not absent`() {
+            assertEquals(emptyList(), readTilePayload(json("""{"records": [], "attribution": []}""")).attribution)
         }
 
         @TestFactory
@@ -120,17 +151,39 @@ class WireTest {
     @DisplayName("getPlace")
     inner class GetPlace {
         @Test
-        fun `reads the record and importance, not the uri`() {
-            val (record, importance) = readPlace(json("""{"uri": 5, "record": {"name": "x"}, "importance": 2.7}"""))
-            assertEquals(json("""{"name": "x"}"""), record)
-            assertEquals(2L, importance)
+        fun `reads the value, importance and attribution, not the uri or url`() {
+            val answer = readPlace(
+                json("""{"uri": 5, "url": 6, "value": {"name": "x"}, "importance": 2.7, "attribution": [{"dataset": "d", "collection": "c", "licenses": ["l"]}]}"""),
+            )
+            assertEquals(PlaceAnswer(json("""{"name": "x"}""") as JsonObject, 2L, listOf(Attribution("d", "c", licenses = listOf("l")))), answer)
+        }
+
+        @Test
+        fun `keeps the attribution in served order, duplicates included, unsorted`() {
+            val answer = readPlace(
+                json(
+                    """{"value": {}, "attribution": [{"dataset": "z", "collection": "c"}, {"dataset": "a", "collection": "c", "release": "1"},
+                        {"dataset": "a", "collection": "c", "release": "2"}, {"dataset": "z", "collection": "c"}]}""",
+                ),
+            )
+            assertEquals(
+                listOf(Attribution("z", "c"), Attribution("a", "c", release = "1"), Attribution("a", "c", release = "2"), Attribution("z", "c")),
+                answer.attribution,
+            )
         }
 
         @TestFactory
-        fun `throws without an object record`(): List<DynamicTest> =
-            listOf("{}", "null", "[]", """{"record": null}""", """{"record": [1]}""", """{"record": "x"}""").map { text ->
-                dynamicTest(text) { assertFailsWith<AtgeoDecodingException> { readPlace(json(text)) } }
+        fun `reads the attribution as empty unless it is an array`(): List<DynamicTest> =
+            listOf("""{"value": {}}""", """{"value": {}, "attribution": null}""", """{"value": {}, "attribution": {}}""", """{"value": {}, "attribution": "x"}""").map { text ->
+                dynamicTest(text) { assertEquals(emptyList(), readPlace(json(text)).attribution) }
             }
+
+        @TestFactory
+        fun `throws without an object value`(): List<DynamicTest> =
+            listOf(
+                "{}", "null", "[]", """{"value": null}""", """{"value": [1]}""", """{"value": "x"}""", """{"value": 5}""",
+                """{"uri": "x", "record": {"name": "x"}}""", // the earlier shape
+            ).map { text -> dynamicTest(text) { assertFailsWith<AtgeoDecodingException> { readPlace(json(text)) } } }
     }
 
     @Nested
@@ -138,18 +191,18 @@ class WireTest {
     inner class Describe {
         @Test
         fun `maps a complete describeService`() {
-            val body = json("""{"did": "did:web:x", "tilesets": [{"slug": "s", "collections": [{"dataset": "d", "collection": "c"}]}], "new": 1}""")
+            val body = json("""{"did": "did:web:x", "maxTiles": 50, "tilesets": [{"slug": "s", "collections": [{"dataset": "d", "collection": "c"}]}], "new": 1}""")
             assertEquals(
-                ServiceDescription("did:web:x", listOf(ServiceDescription.ServedTileset("s", listOf(CollectionRef("d", "c"))))),
+                ServiceDescription("did:web:x", 50, listOf(ServiceDescription.ServedTileset("s", listOf(CollectionRef("d", "c"))))),
                 readServiceDescription(body),
             )
         }
 
         @Test
         fun `reads missing and wrong-typed fields as absent and required lists as empty`() {
-            assertEquals(ServiceDescription(null, emptyList()), readServiceDescription(json("""{"did": 7, "tilesets": "x"}""")))
+            assertEquals(ServiceDescription(null, null, emptyList()), readServiceDescription(json("""{"did": 7, "maxTiles": "50", "tilesets": "x"}""")))
             assertEquals(
-                ServiceDescription(null, listOf(ServiceDescription.ServedTileset(null, emptyList()), ServiceDescription.ServedTileset("s", emptyList()))),
+                ServiceDescription(null, null, listOf(ServiceDescription.ServedTileset(null, emptyList()), ServiceDescription.ServedTileset("s", emptyList()))),
                 readServiceDescription(json("""{"tilesets": [{}, 5, null, {"slug": "s", "collections": {}}]}""")),
             )
         }
@@ -159,7 +212,7 @@ class WireTest {
             val body = json(
                 """
                 {"slug": "s", "publishedAt": "2026-01-01T00:00:00Z",
-                 "extent": {"north": "1", "south": 2, "east": "3"},
+                 "extent": {"north": "1", "south": 2, "east": "3"}, "overview": {"records": 1234.9, "extra": 1},
                  "collections": [{"dataset": "d", "collection": "c", "recordCount": 12.9, "licenses": ["a", 1, "b"],
                                   "locationFormats": "x", "categories": [{"value": "v", "count": "3"}, 4, {}], "attributes": []}, "junk"],
                  "references": [{"dataset": "r", "licenses": null}]}
@@ -181,6 +234,7 @@ class WireTest {
                         ),
                     ),
                     references = listOf(CollectionAttribution(dataset = "r")),
+                    overview = Tileset.Overview(1234),
                 ),
                 readTileset(body),
             )
@@ -190,6 +244,12 @@ class WireTest {
         fun `reads an extent that is not an object as absent and a missing collections list as empty`() {
             assertEquals(Tileset(), readTileset(json("""{"extent": [1], "collections": null}""")))
         }
+
+        @TestFactory
+        fun `reads an overview that is not an object as absent and its unreadable records as absent`(): List<DynamicTest> = listOf(
+            "null" to null, "[]" to null, "5" to null, "\"x\"" to null, "{}" to Tileset.Overview(null),
+            """{"records": "9"}""" to Tileset.Overview(null), """{"records": 7}""" to Tileset.Overview(7),
+        ).map { (text, expected) -> dynamicTest("overview $text") { assertEquals(expected, readTileset(json("""{"overview": $text}""")).overview) } }
 
         @TestFactory
         fun `throws for a body that is not an object`(): List<DynamicTest> =

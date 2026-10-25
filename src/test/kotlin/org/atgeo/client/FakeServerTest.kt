@@ -82,11 +82,35 @@ class FakeServerTest {
         }
 
         @Test
+        fun `answers getPlace with exactly uri, url, importance, value and attribution`() = runTest {
+            val origin = ok["origin"].stringOrNull()!!
+            val uri = "uri=${java.net.URLEncoder.encode(origin, "UTF-8")}"
+            val body = parseBody(build(listOf(record(ok, 3))).get("$DEFAULT_SERVER/xrpc/org.atgeo.getPlace?$uri").body) as JsonObject
+            assertEquals(listOf("attribution", "importance", "uri", "url", "value"), body.keys.sorted())
+            assertEquals(JsonPrimitive(origin), body["uri"])
+            assertEquals(ok, body["value"])
+            assertEquals(JsonPrimitive(3), body["importance"])
+            assertEquals(JsonArray(listOf(collectionOf("overturemaps.org", "place"))), body["attribution"])
+            val bare = parseBody(build(listOf(record(ok))).get("$DEFAULT_SERVER/xrpc/org.atgeo.getPlace?$uri").body) as JsonObject
+            assertEquals(listOf("attribution", "uri", "url", "value"), bare.keys.sorted())
+        }
+
+        @Test
+        fun `emits a tileset's overview in its descriptor`() = runTest {
+            val fake = FakeServer(
+                tilesets = listOf(overture(emptyList()).copy(overview = buildJsonObject { put("records", 7) })),
+            )
+            val body = parseBody(fake.get("$DEFAULT_SERVER/xrpc/org.atgeo.describeTileset?slug=overture-place").body) as JsonObject
+            assertEquals(buildJsonObject { put("records", 7) }, body["overview"])
+        }
+
+        @Test
         fun `answers describeService with a did and tilesets`() = runTest {
             val body = parseBody(build(emptyList()).get("$DEFAULT_SERVER/xrpc/org.atgeo.describeService").body)
             assertEquals(
                 buildJsonObject {
                     put("did", "did:web:places.atgeo.org")
+                    put("maxTiles", 50)
                     put(
                         "tilesets",
                         JsonArray(

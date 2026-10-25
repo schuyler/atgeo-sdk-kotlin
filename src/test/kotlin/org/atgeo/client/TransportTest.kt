@@ -46,14 +46,14 @@ class TransportTest {
     inner class FailedTiles {
         @Test
         fun `reports a complete search`() = runTest {
-            val result = client(twoTiles()).searchPlaces(region)
+            val result = client(twoTiles()).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(true, result.complete)
             assertEquals(SearchResult.TileCounts(fetched = 2, failed = 0), result.tiles)
         }
 
         @Test
         fun `returns surviving results, marked incomplete, when a tile answers non-200`() = runTest {
-            val result = client(twoTiles(setOf(tileUrl("b")))).searchPlaces(region)
+            val result = client(twoTiles(setOf(tileUrl("b")))).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(false, result.complete)
             assertEquals(SearchResult.TileCounts(fetched = 1, failed = 1), result.tiles)
             assertEquals(listOf(placeOrigin("a")), result.places.map { it.origin })
@@ -63,7 +63,7 @@ class TransportTest {
         fun `returns an incomplete result when a tile fetch rejects`() = runTest {
             val server = twoTiles()
             val flaky = HttpTransport { url -> if (url == tileUrl("a")) throw IOException("boom") else server.get(url) }
-            val result = client(flaky).searchPlaces(region)
+            val result = client(flaky).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(false, result.complete)
             assertEquals(SearchResult.TileCounts(fetched = 1, failed = 1), result.tiles)
             assertEquals(listOf(placeOrigin("b")), result.places.map { it.origin })
@@ -72,13 +72,13 @@ class TransportTest {
         @Test
         fun `does not retry a failed tile`() = runTest {
             val server = twoTiles(setOf(tileUrl("b")))
-            client(server).searchPlaces(region)
+            client(server).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(1, server.requests.count { it == tileUrl("b") })
         }
 
         @Test
         fun `reports every tile failed without throwing`() = runTest {
-            val result = client(twoTiles(setOf(tileUrl("a"), tileUrl("b")))).searchPlaces(region)
+            val result = client(twoTiles(setOf(tileUrl("a"), tileUrl("b")))).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(emptyList(), result.places)
             assertEquals(false, result.complete)
             assertEquals(SearchResult.TileCounts(fetched = 0, failed = 2), result.tiles)
@@ -99,7 +99,7 @@ class TransportTest {
 
         @Test
         fun `is empty when every tile loads`() = runTest {
-            val result = client(twoTiles()).searchPlaces(region)
+            val result = client(twoTiles()).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(emptyList(), result.tileFailures)
             assertEquals(true, result.complete)
         }
@@ -107,7 +107,7 @@ class TransportTest {
         @Test
         fun `reports a refused URL, with no request`() = runTest {
             val server = serverFor(listOf("file:///etc/passwd", ok))
-            val result = client(server).searchPlaces(region)
+            val result = client(server).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(listOf(Triple("file:///etc/passwd", TileFailure.Kind.REFUSED, null)), result.summary())
             assertIs<java.net.MalformedURLException>(result.tileFailures.single().error)
             assertEquals(listOf(ok), server.requests.filter { "/xrpc/" !in it })
@@ -122,7 +122,7 @@ class TransportTest {
             dynamicTest("$status") {
                 runTest {
                     val bad = tileUrl("a")
-                    val result = client(serverFor(listOf(bad, ok), mapOf(bad to HttpResponse(status, body.toByteArray())))).searchPlaces(region)
+                    val result = client(serverFor(listOf(bad, ok), mapOf(bad to HttpResponse(status, body.toByteArray())))).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
                     assertEquals(listOf(Triple(bad, TileFailure.Kind.STATUS, status)), result.summary())
                     val error = assertIs<AtgeoException>(result.tileFailures.single().error)
                     assertEquals(status, error.status)
@@ -145,7 +145,7 @@ class TransportTest {
             dynamicTest(body.ifEmpty { "(empty)" }.take(40)) {
                 runTest {
                     val bad = tileUrl("a")
-                    val result = client(serverFor(listOf(bad, ok), mapOf(bad to HttpResponse(200, body.toByteArray())))).searchPlaces(region)
+                    val result = client(serverFor(listOf(bad, ok), mapOf(bad to HttpResponse(200, body.toByteArray())))).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
                     assertEquals(listOf(Triple(bad, TileFailure.Kind.DECODE, null)), result.summary())
                     assertIs<AtgeoDecodingException>(result.tileFailures.single().error)
                 }
@@ -157,7 +157,7 @@ class TransportTest {
             val server = serverFor(listOf(tileUrl("a"), ok, tileUrl("c")))
             val thrown = mapOf(tileUrl("a") to IOException("connection reset"), tileUrl("c") to IllegalStateException("a bug in the app's transport"))
             val transport = HttpTransport { url -> thrown[url]?.let { throw it } ?: server.get(url) }
-            val result = client(transport).searchPlaces(region)
+            val result = client(transport).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(
                 listOf(Triple(tileUrl("a"), TileFailure.Kind.TRANSPORT, null), Triple(tileUrl("c"), TileFailure.Kind.TRANSPORT, null)),
                 result.summary(),
@@ -171,7 +171,7 @@ class TransportTest {
             val server = serverFor(listOf(tileUrl("a"), ok))
             val thrown = AtgeoException("Teapot", "I'm a teapot", 418)
             val transport = HttpTransport { url -> if (url == tileUrl("a")) throw thrown else server.get(url) }
-            val result = client(transport).searchPlaces(region)
+            val result = client(transport).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(listOf(Triple(tileUrl("a"), TileFailure.Kind.TRANSPORT, null)), result.summary())
             assertSame<Throwable>(thrown, result.tileFailures.single().error)
         }
@@ -180,7 +180,7 @@ class TransportTest {
         fun `reports a transport's own timeout as TRANSPORT`() = runTest {
             val server = serverFor(listOf(tileUrl("a"), ok))
             val transport = HttpTransport { url -> if (url == tileUrl("a")) withTimeout(10) { awaitCancellation() } else server.get(url) }
-            val result = client(transport).searchPlaces(region)
+            val result = client(transport).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(listOf(Triple(tileUrl("a"), TileFailure.Kind.TRANSPORT, null)), result.summary())
             assertIs<java.net.SocketTimeoutException>(result.tileFailures.single().error)
         }
@@ -198,7 +198,7 @@ class TransportTest {
                 if (url == tileUrl("c")) throw IOException("reset")
                 server.get(url)
             }
-            val result = client(transport).searchPlaces(region)
+            val result = client(transport).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(
                 listOf(
                     Triple("ftp://tiles.example/0.json", TileFailure.Kind.REFUSED, null),
@@ -220,8 +220,8 @@ class TransportTest {
             val server = serverFor(listOf(tileUrl("a"), ok))
             val transport = HttpTransport { url -> if (url == tileUrl("a")) throw IOException("failure ${++n}") else server.get(url) }
             val c = client(transport)
-            val first = c.searchPlaces(region)
-            val second = c.searchPlaces(region)
+            val first = c.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            val second = c.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertNotSame(first.tileFailures.single().error, second.tileFailures.single().error)
             assertEquals(first, second)
             assertEquals(first.hashCode(), second.hashCode())
@@ -246,7 +246,7 @@ class TransportTest {
                 }
             }
             val client = AtgeoClient(transport = transport, computeDispatcher = Dispatchers.Default)
-            val search = async(Dispatchers.Default) { client.searchPlaces(region) }
+            val search = async(Dispatchers.Default) { client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION) }
             withTimeout(5_000) { started.await() }
             search.cancel()
             assertIs<CancellationException>(runCatching { search.await() }.exceptionOrNull())
@@ -322,7 +322,7 @@ class TransportTest {
                     val asked = mutableListOf<String>()
                     val server = FakeServer(tilesFor = { TilesAnswer.Urls(listOf(url)) })
                     val transport = HttpTransport { u -> if ("/xrpc/" in u) server.get(u) else { asked += u; emptyTile } }
-                    val result = client(transport).searchPlaces(region)
+                    val result = client(transport).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
                     assertEquals(SearchResult.TileCounts(fetched = 0, failed = 1), result.tiles)
                     assertEquals(false, result.complete)
                     assertEquals(emptyList(), asked)
@@ -355,7 +355,7 @@ class TransportTest {
                     val asked = mutableListOf<String>()
                     val server = FakeServer(tilesFor = { TilesAnswer.Urls(listOf(url)) })
                     val transport = HttpTransport { u -> if ("/xrpc/" in u) server.get(u) else { asked += u; emptyTile } }
-                    val result = client(transport).searchPlaces(region)
+                    val result = client(transport).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
                     assertEquals(SearchResult.TileCounts(fetched = 1, failed = 0), result.tiles)
                     assertEquals(listOf(url), asked)
                 }
@@ -370,7 +370,7 @@ class TransportTest {
             val transport = HttpTransport { u ->
                 if ("/xrpc/" in u) FakeServer(tilesFor = { TilesAnswer.Urls(urls) }).get(u) else server.get(u)
             }
-            val result = client(transport).searchPlaces(region)
+            val result = client(transport).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(SearchResult.TileCounts(fetched = 1, failed = 1), result.tiles)
             assertEquals(listOf(placeOrigin("a")), result.places.map { it.origin })
             assertEquals(listOf(good), server.requests)
@@ -383,14 +383,14 @@ class TransportTest {
         @Test
         fun `surfaces BboxTooLarge from getTiles`() = runTest {
             val server = FakeServer(tilesFor = { TilesAnswer.Error("BboxTooLarge", "bbox too large") })
-            val error = assertFailsWith<AtgeoException> { client(server).searchPlaces(region) }
+            val error = assertFailsWith<AtgeoException> { client(server).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION) }
             assertEquals("BboxTooLarge", error.code)
             assertEquals(400, error.status)
         }
 
         @Test
         fun `surfaces CollectionNotFound from getTiles`() = runTest {
-            val error = assertFailsWith<AtgeoException> { client(FakeServer()).searchPlaces(region, collection = "nope") }
+            val error = assertFailsWith<AtgeoException> { client(FakeServer()).searchPlaces(region, OVERTURE_DATASET, collection = "nope") }
             assertEquals("CollectionNotFound", error.code)
         }
 
@@ -411,7 +411,7 @@ class TransportTest {
                                 if (bbox.startsWith(prefix)) TilesAnswer.Error("BboxTooLarge", "too large") else TilesAnswer.Urls(listOf(tileUrl("a")))
                             },
                         )
-                        val error = assertFailsWith<AtgeoException> { client(server).searchPlaces(Region.Bbox(170.0, 10.0, -170.0, 20.0)) }
+                        val error = assertFailsWith<AtgeoException> { client(server).searchPlaces(Region.Bbox(170.0, 10.0, -170.0, 20.0), OVERTURE_DATASET, collection = OVERTURE_COLLECTION) }
                         assertEquals("BboxTooLarge", error.code)
                     }
                 }
@@ -420,7 +420,7 @@ class TransportTest {
         @Test
         fun `does not subdivide after BboxTooLarge`() = runTest {
             val server = FakeServer(tilesFor = { TilesAnswer.Error("BboxTooLarge", "too large") })
-            runCatching { client(server).searchPlaces(region) }
+            runCatching { client(server).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION) }
             assertEquals(1, server.requests.size)
         }
     }
@@ -432,7 +432,7 @@ class TransportTest {
         @DisplayName("defaults to places.atgeo.org")
         fun defaultsToPlacesAtgeoOrg() = runTest {
             val server = twoTiles()
-            client(server).searchPlaces(region)
+            client(server).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             val u = server.requests[0]
             assertEquals("$DEFAULT_SERVER/xrpc/org.atgeo.getTiles", endpointOf(u))
             assertEquals("overturemaps.org", paramsOf(u)["dataset"])
@@ -448,7 +448,7 @@ class TransportTest {
                 tilesets = listOf(overture(listOf(FakeTile("$base/tiles/a.json", listOf(record(place("a", "A", listOf(point(37.772, -122.412))))))))),
             )
             val client = client(server, server = base)
-            client.searchPlaces(region)
+            client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             client.describeService()
             client.describeTileset("overture-place")
             runCatching { client.getPlace(placeOrigin("zzz")) }

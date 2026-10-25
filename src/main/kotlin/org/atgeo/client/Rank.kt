@@ -60,7 +60,7 @@ internal fun rank(records: List<TileRecord>, region: Region, query: String, sort
         val locations = locate(record.value)
         // Never null here: the region filter already required a location.
         val distance = distanceTo(locations, middle.lat, middle.lon) ?: continue
-        val hit = SearchHit(recordKey(record), record.value, record.importance, distance, score)
+        val hit = SearchHit(recordKey(record), null, record.value, record.importance, distance, score)
         ranked.add(Ranked(hit, specificity(locations), ranked.size))
     }
     return ranked.sortedWith(order(sort)).map { it.hit }

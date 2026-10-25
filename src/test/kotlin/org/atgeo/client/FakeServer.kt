@@ -19,6 +19,10 @@ import java.net.URLDecoder
 internal const val DEFAULT_SERVER = "https://places.atgeo.org"
 private const val PUBLISHED_AT = "2026-01-01T00:00:00Z"
 
+/** The dataset and collection a search names: searchPlaces has no defaults (contract §4.1). */
+internal const val OVERTURE_DATASET = "overturemaps.org"
+internal const val OVERTURE_COLLECTION = "place"
+
 internal fun placeOrigin(id: String) = "urn:atgeo:overturemaps.org:place:$id"
 
 // JavaScript's toFixed(6): the exact binary value, rounded half away from zero.
@@ -72,6 +76,7 @@ internal data class FakeTileset(
     val slug: String?,
     val collections: List<JsonObject>,
     val references: List<JsonObject>? = null,
+    val overview: JsonObject? = null,
     val tiles: List<FakeTile>,
 )
 
@@ -176,6 +181,7 @@ internal class FakeServer(
                 "org.atgeo.describeService" -> json(
                     buildJsonObject {
                         put("did", did)
+                        put("maxTiles", 50)
                         put(
                             "tilesets",
                             buildJsonArray {
@@ -238,9 +244,11 @@ internal class FakeServer(
                 val found = tile.records.firstOrNull { (it["value"] as JsonObject)["origin"].stringOrNull() == origin } ?: continue
                 return json(
                     buildJsonObject {
-                        put("uri", "$server/$dataset/$collection/${parts.drop(4).joinToString(":")}")
+                        put("uri", origin)
+                        put("url", "$server/$dataset/$collection/${parts.drop(4).joinToString(":")}")
                         found["importance"]?.let { put("importance", it) }
-                        put("record", found.getValue("value"))
+                        put("value", found.getValue("value"))
+                        put("attribution", attributionList(tileset))
                     },
                 )
             }
@@ -251,9 +259,13 @@ internal class FakeServer(
     private fun attributionOf(c: JsonObject) =
         JsonObject(c.filterKeys { it in setOf("dataset", "collection", "release", "source", "licenses", "attribution") })
 
+    // The attribution every tile of the tileset carries, and getPlace answers with: its collections, then its references.
+    private fun attributionList(tileset: FakeTileset) =
+        JsonArray(tileset.collections.map(::attributionOf) + tileset.references.orEmpty())
+
     private fun tileBody(tileset: FakeTileset, records: List<JsonObject>) = buildJsonObject {
         put("publishedAt", PUBLISHED_AT)
-        put("attribution", JsonArray(tileset.collections.map(::attributionOf) + tileset.references.orEmpty()))
+        put("attribution", attributionList(tileset))
         put("records", JsonArray(records))
     }
 
@@ -261,6 +273,7 @@ internal class FakeServer(
         put("slug", t.slug)
         put("collections", JsonArray(t.collections))
         if (t.references != null) put("references", JsonArray(t.references))
+        if (t.overview != null) put("overview", t.overview)
     }
 }
 
@@ -281,3 +294,20 @@ internal fun paramsOf(url: String): Map<String, String> =
 
 /** Scheme, host and path of a captured URL: the reference's `u.origin + u.pathname`. */
 internal fun endpointOf(url: String): String = url.substringBefore('?')
+
+/**
+ * Does to a read-only list what a careless app could through a cast: add, reorder, remove, clear. The list
+ * may refuse (an unmodifiable view throws); what matters is that nothing cached changes (contract §9).
+ */
+internal fun tryToChange(list: List<*>?) {
+    @Suppress("UNCHECKED_CAST")
+    val changeable = list as? MutableList<Any?> ?: return
+    for (change in listOf<(MutableList<Any?>) -> Unit>({ it.add("changed") }, { it.reverse() }, { it.removeAt(0) }, { it.clear() })) {
+        try {
+            change(changeable)
+        } catch (_: UnsupportedOperationException) {
+        } catch (_: ClassCastException) {
+        } catch (_: IndexOutOfBoundsException) {
+        }
+    }
+}

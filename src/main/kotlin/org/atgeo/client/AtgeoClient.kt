@@ -15,8 +15,6 @@ import java.net.MalformedURLException
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.min
 
-private const val DEFAULT_DATASET = "overturemaps.org"
-private const val DEFAULT_COLLECTION = "place"
 private const val MAX_TILES_IN_FLIGHT = 8
 private const val ONE_HOUR_MILLIS = 3_600_000L
 
@@ -64,8 +62,8 @@ public class AtgeoClient internal constructor(
      * Neither the text nor the region's precise coordinates leave the device: the server sees only
      * the region snapped outward to a 0.01° grid.
      *
-     * With no `dataset` and no `collection`, searches overturemaps.org / place; with a `dataset`
-     * alone, that whole dataset; with a `collection` alone, that collection of overturemaps.org.
+     * Searches the collection of `dataset` that `collection` names, or the whole dataset without one.
+     * `dataset` is required and has no default; an empty string goes to the server as given.
      *
      * A tile that fails to load does not fail the search: the result is marked incomplete, and the
      * tile is reported in [SearchResult.tileFailures] with its URL and where it failed.
@@ -76,17 +74,15 @@ public class AtgeoClient internal constructor(
      */
     public suspend fun searchPlaces(
         region: Region,
+        dataset: String,
         text: String? = null,
-        dataset: String? = null,
         collection: String? = null,
         sort: SortMode = SortMode.FUSED,
     ): SearchResult {
         validateRegion(region)
         val query = normalize(text ?: "")
         require(sort != SortMode.SIMILARITY || query.isNotEmpty()) { "sort SIMILARITY requires text" }
-        val searchedDataset = dataset ?: DEFAULT_DATASET
-        val searchedCollection = collection ?: if (dataset == null) DEFAULT_COLLECTION else null
-        return withContext(computeDispatcher) { search(region, query, sort, searchedDataset, searchedCollection) }
+        return withContext(computeDispatcher) { search(region, query, sort, dataset, collection) }
     }
 
     private suspend fun search(
@@ -126,7 +122,7 @@ public class AtgeoClient internal constructor(
             .filter { prefix == null || it.value["origin"].stringOrNull()?.startsWith(prefix) == true }
             .filter { inRegion(locate(it.value), region) }
         val counts = SearchResult.TileCounts(fetched = used.size, failed = tileFailures.size)
-        SearchResult(rank(records, region, query, sort), tileFailures.isEmpty(), overview, counts, tileFailures)
+        SearchResult(rank(records, region, query, sort), tileFailures.isEmpty(), overview, counts, tileFailures, emptyList())
     }
 
     private suspend fun tileList(dataset: String, collection: String?, bbox: String): TileList {
@@ -196,7 +192,7 @@ public class AtgeoClient internal constructor(
     // only that Error, never Error in general. kotlinx.serialization refuses deep nesting with a
     // SerializationException before it can overflow, so this is a guard for later versions.
     private fun decodeTile(body: ByteArray): List<TileRecord> = try {
-        readTilePayload(parseBody(body))
+        readTilePayload(parseBody(body)).records
     } catch (e: StackOverflowError) {
         throw AtgeoDecodingException("tile payload is too deeply nested", e)
     }
@@ -213,12 +209,12 @@ public class AtgeoClient internal constructor(
         val cached = withContext(computeDispatcher) {
             val found = mutex.withLock { tiles.find(origin)?.let { (url, entry) -> entry to parsed.get(url, entry) } }
             found?.let { (entry, records) ->
-                (records ?: readTilePayload(parseBody(entry.body))).first { recordKey(it) == origin }
+                (records ?: readTilePayload(parseBody(entry.body)).records).first { recordKey(it) == origin }
             }
         }
-        if (cached != null) return PlaceRecord(origin, cached.value, cached.importance)
-        val (record, importance) = readPlace(xrpc.query("org.atgeo.getPlace", listOf("uri" to origin)))
-        return PlaceRecord(origin, record, importance)
+        if (cached != null) return PlaceRecord(origin, cached.value, cached.importance, emptyList())
+        val answer = readPlace(xrpc.query("org.atgeo.getPlace", listOf("uri" to origin)))
+        return PlaceRecord(origin, answer.value, answer.importance, answer.attribution)
     }
 
     /** What the server serves. Cached for an hour. */

@@ -59,14 +59,23 @@ internal fun parseBody(body: ByteArray): JsonElement = try {
 
 private fun unusable(what: String): Nothing = throw AtgeoDecodingException(what)
 
-/** The usable records of a tile payload. Throws AtgeoDecodingException when there is no `records` array. */
-internal fun readTilePayload(body: JsonElement): List<TileRecord> {
+/**
+ * A tile payload as read: its usable records, and its attribution (contract §1), which is null unless the
+ * payload's `attribution` is an array.
+ */
+internal data class TilePayload(val records: List<TileRecord>, val attribution: List<Attribution>?)
+
+/** The usable records and attribution of a tile payload. Throws AtgeoDecodingException when there is no `records` array. */
+internal fun readTilePayload(body: JsonElement): TilePayload {
     val records = (body as? JsonObject)?.get("records") as? JsonArray ?: unusable("tile payload has no records array")
-    return records.mapNotNull { element ->
-        val record = element as? JsonObject ?: return@mapNotNull null
-        val value = record["value"] as? JsonObject ?: return@mapNotNull null
-        TileRecord(value, record["uri"].stringOrNull(), record["importance"].int64OrNull())
-    }
+    return TilePayload(
+        records.mapNotNull { element ->
+            val record = element as? JsonObject ?: return@mapNotNull null
+            val value = record["value"] as? JsonObject ?: return@mapNotNull null
+            TileRecord(value, record["uri"].stringOrNull(), record["importance"].int64OrNull())
+        },
+        attribution = null, // TODO(contract §1, §4.4): read the payload's attribution
+    )
 }
 
 internal data class TileList(val tiles: List<String>, val overview: Boolean)
@@ -78,11 +87,15 @@ internal fun readTileList(body: JsonElement): TileList {
     return TileList(tiles.mapNotNull { it.stringOrNull() }, obj["overview"].truthy())
 }
 
-/** A getPlace answer's record and importance. Throws AtgeoDecodingException when there is no object `record`. */
-internal fun readPlace(body: JsonElement): Pair<JsonObject, Long?> {
+/** A getPlace answer: the place's value, its importance and its attribution, always a list (contract §1, §9). */
+internal data class PlaceAnswer(val value: JsonObject, val importance: Long?, val attribution: List<Attribution>)
+
+/** A getPlace answer. Throws AtgeoDecodingException when there is no object `value`. */
+internal fun readPlace(body: JsonElement): PlaceAnswer {
     val obj = body as? JsonObject ?: unusable("getPlace body is not an object")
+    // TODO(contract §1, R3): read `value` and `attribution`; `record` is the earlier shape
     val record = obj["record"] as? JsonObject ?: unusable("getPlace body has no record object")
-    return record to obj["importance"].int64OrNull()
+    return PlaceAnswer(record, obj["importance"].int64OrNull(), emptyList())
 }
 
 private fun JsonObject.string(key: String): String? = this[key].stringOrNull()

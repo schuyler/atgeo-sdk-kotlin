@@ -25,7 +25,7 @@ class OverviewTest {
     inner class OverviewAnswers {
         @Test
         fun `flags an overview answer whose tiles all load as overview and complete`() = runTest {
-            val result = client(server({ TilesAnswer.Listing(listOf(EAST, WEST), overview = true) })).searchPlaces(region)
+            val result = client(server({ TilesAnswer.Listing(listOf(EAST, WEST), overview = true) })).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(true, result.overview)
             assertEquals(true, result.complete)
             // The reference also asserts no "summary" property; SearchResult has a fixed shape.
@@ -33,22 +33,22 @@ class OverviewTest {
 
         @Test
         fun `does not flag a regular answer with a failed tile`() = runTest {
-            val result = client(server(failTiles = setOf(WEST))).searchPlaces(region)
+            val result = client(server(failTiles = setOf(WEST))).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(false, result.overview)
             assertEquals(false, result.complete)
         }
 
         @Test
         fun `reads an answer without the key as regular`() = runTest {
-            assertEquals(false, client(server({ TilesAnswer.Listing(listOf(EAST, WEST)) })).searchPlaces(region).overview)
+            assertEquals(false, client(server({ TilesAnswer.Listing(listOf(EAST, WEST)) })).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION).overview)
         }
 
         @Test
         fun `keeps the flag when the tile-list cache answers`() = runTest {
             val fake = server({ TilesAnswer.Listing(listOf(EAST, WEST), overview = true) })
             val client = client(fake)
-            client.searchPlaces(region)
-            val second = client.searchPlaces(region)
+            client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            val second = client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(1, tilesCount(fake.requests))
             assertEquals(true, second.overview)
         }
@@ -58,7 +58,7 @@ class OverviewTest {
             val fake = server({ bbox ->
                 if (bbox.startsWith("170")) TilesAnswer.Listing(listOf(EAST), overview = true) else TilesAnswer.Listing(listOf(WEST))
             })
-            assertEquals(true, client(fake).searchPlaces(Region.Bbox(170.0, 10.0, -170.0, 20.0)).overview)
+            assertEquals(true, client(fake).searchPlaces(Region.Bbox(170.0, 10.0, -170.0, 20.0), OVERTURE_DATASET, collection = OVERTURE_COLLECTION).overview)
         }
     }
 }

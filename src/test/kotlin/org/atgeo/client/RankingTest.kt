@@ -24,8 +24,8 @@ private fun tileRecord(origin: String?, name: String = "Same", importance: Long?
 
 private fun nameOf(hit: SearchHit) = (hit.place["name"] as JsonPrimitive).content
 
-// The fixture's region is {lat, lon, radius} or {bbox: [minLon, minLat, maxLon, maxLat]}.
-private fun regionOf(o: JsonObject): Region {
+// The fixture's region is {lat, lon, radius} or {bbox: [west, south, east, north]}.
+internal fun regionOf(o: JsonObject): Region {
     val bbox = o["bbox"] as? JsonArray
     if (bbox != null) {
         val (a, b, c, d) = bbox.map { it.jsonPrimitive.content.toDouble() }
@@ -51,7 +51,13 @@ class RankingTest {
                     }
                     val server = FakeServer(tilesets = listOf(overture(listOf(FakeTile("https://places.atgeo.org/tiles/t0.json", records)))))
                     val sort = s["sort"].stringOrNull()?.let { SortMode.valueOf(it.uppercase()) } ?: SortMode.FUSED
-                    val places = client(server).searchPlaces(regionOf(s.getValue("region") as JsonObject), text = s["text"].stringOrNull(), sort = sort).places
+                    val places = client(server).searchPlaces(
+                        regionOf(s.getValue("region") as JsonObject),
+                        s.getValue("dataset").stringOrNull()!!,
+                        text = s["text"].stringOrNull(),
+                        collection = s.getValue("collection").stringOrNull(),
+                        sort = sort,
+                    ).places
                     val origins = places.map { it.origin }
                     val expect = s.getValue("expect") as JsonObject
                     val top = expect.getValue("top") as JsonArray
