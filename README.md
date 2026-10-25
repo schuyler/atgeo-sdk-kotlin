@@ -53,7 +53,7 @@ To work on it from a checkout, `includeBuild("../atgeo-sdk-kotlin")` in your `se
 ```kotlin
 val atgeo = AtgeoClient(
     server = "http://localhost:8000",          // default: https://places.atgeo.org
-    transport = OkHttpTransport(),             // default: HttpUrlConnectionTransport()
+    transport = myTransport,                   // default: HttpUrlConnectionTransport(); see Transports
     cacheBudgetBytes = 10L * 1024 * 1024,      // default: 50 MiB
     computeDispatcher = Dispatchers.Default,   // the default
 )
