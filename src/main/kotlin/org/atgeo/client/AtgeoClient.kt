@@ -68,7 +68,8 @@ public class AtgeoClient internal constructor(
      * A tile that fails to load does not fail the search: the result is marked incomplete, and the
      * tile is reported in [SearchResult.tileFailures] with its URL and where it failed.
      *
-     * @throws IllegalArgumentException for an invalid region, or [SortMode.SIMILARITY] without text,
+     * @throws IllegalArgumentException for a null `dataset` (only a Java or reflective caller can pass one),
+     *   an invalid region, or [SortMode.SIMILARITY] without text,
      *   before any request is made.
      * @throws AtgeoException when a getTiles call is refused by the server.
      */
