@@ -51,7 +51,13 @@ private fun order(sort: SortMode): Comparator<Ranked> = when (sort) {
  * Scores, filters and orders records that already passed the region filter (contract §7, §8).
  * `query` is already normalized; "" means no text.
  */
-internal fun rank(records: List<TileRecord>, region: Region, query: String, sort: SortMode): List<SearchHit> {
+internal fun rank(
+    records: List<TileRecord>,
+    region: Region,
+    query: String,
+    sort: SortMode,
+    collectionOf: (TileRecord) -> CollectionKey? = { null },
+): List<SearchHit> {
     val middle = center(region)
     val ranked = ArrayList<Ranked>(records.size)
     for (record in records) {
@@ -60,7 +66,7 @@ internal fun rank(records: List<TileRecord>, region: Region, query: String, sort
         val locations = locate(record.value)
         // Never null here: the region filter already required a location.
         val distance = distanceTo(locations, middle.lat, middle.lon) ?: continue
-        val hit = SearchHit(recordKey(record), record.value, record.importance, distance, score)
+        val hit = SearchHit(recordKey(record), collectionOf(record), record.value, record.importance, distance, score)
         ranked.add(Ranked(hit, specificity(locations), ranked.size))
     }
     return ranked.sortedWith(order(sort)).map { it.hit }

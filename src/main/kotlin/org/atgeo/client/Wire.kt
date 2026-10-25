@@ -11,7 +11,7 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlin.math.abs
 
-// Lenient readers from parsed JSON (contract §1, §16). A missing or
+// Lenient readers from parsed JSON (contract §1). A missing or
 // wrong-typed field reads as absent; only a body with nothing usable throws.
 // A primitive is reached with `as? JsonPrimitive`, never `.jsonPrimitive`
 // (which throws on an object or array), and its kind is checked before it is
@@ -59,14 +59,40 @@ internal fun parseBody(body: ByteArray): JsonElement = try {
 
 private fun unusable(what: String): Nothing = throw AtgeoDecodingException(what)
 
-/** The usable records of a tile payload. Throws AtgeoDecodingException when there is no `records` array. */
-internal fun readTilePayload(body: JsonElement): List<TileRecord> {
+/**
+ * A tile payload as read: its usable records, and its attribution (contract §1), which is null unless the
+ * payload's `attribution` is an array.
+ */
+internal data class TilePayload(val records: List<TileRecord>, val attribution: List<Attribution>?)
+
+/**
+ * An `attribution` list (contract §1): null unless an array. An element is kept only if it is an object whose `dataset`
+ * and `collection` are both strings; `release`, `source` and `attribution` are strings or absent and `licenses` the
+ * string elements of an array or absent, each read on its own. Served order, duplicates included.
+ */
+internal fun readAttribution(element: JsonElement?): List<Attribution>? = (element as? JsonArray)?.mapNotNull { e ->
+    val o = e as? JsonObject ?: return@mapNotNull null
+    Attribution(
+        dataset = o["dataset"].stringOrNull() ?: return@mapNotNull null,
+        collection = o["collection"].stringOrNull() ?: return@mapNotNull null,
+        release = o["release"].stringOrNull(),
+        source = o["source"].stringOrNull(),
+        licenses = (o["licenses"] as? JsonArray)?.mapNotNull { it.stringOrNull() },
+        attribution = o["attribution"].stringOrNull(),
+    )
+}
+
+/** The usable records and attribution of a tile payload. Throws AtgeoDecodingException when there is no `records` array. */
+internal fun readTilePayload(body: JsonElement): TilePayload {
     val records = (body as? JsonObject)?.get("records") as? JsonArray ?: unusable("tile payload has no records array")
-    return records.mapNotNull { element ->
-        val record = element as? JsonObject ?: return@mapNotNull null
-        val value = record["value"] as? JsonObject ?: return@mapNotNull null
-        TileRecord(value, record["uri"].stringOrNull(), record["importance"].int64OrNull())
-    }
+    return TilePayload(
+        records.mapNotNull { element ->
+            val record = element as? JsonObject ?: return@mapNotNull null
+            val value = record["value"] as? JsonObject ?: return@mapNotNull null
+            TileRecord(value, record["uri"].stringOrNull(), record["importance"].int64OrNull())
+        },
+        attribution = readAttribution((body as JsonObject)["attribution"]),
+    )
 }
 
 internal data class TileList(val tiles: List<String>, val overview: Boolean)
@@ -78,11 +104,14 @@ internal fun readTileList(body: JsonElement): TileList {
     return TileList(tiles.mapNotNull { it.stringOrNull() }, obj["overview"].truthy())
 }
 
-/** A getPlace answer's record and importance. Throws AtgeoDecodingException when there is no object `record`. */
-internal fun readPlace(body: JsonElement): Pair<JsonObject, Long?> {
+/** A getPlace answer: the place's value, its importance and its attribution, always a list (contract §1, §9). */
+internal data class PlaceAnswer(val value: JsonObject, val importance: Long?, val attribution: List<Attribution>)
+
+/** A getPlace answer. Throws AtgeoDecodingException when there is no object `value`. */
+internal fun readPlace(body: JsonElement): PlaceAnswer {
     val obj = body as? JsonObject ?: unusable("getPlace body is not an object")
-    val record = obj["record"] as? JsonObject ?: unusable("getPlace body has no record object")
-    return record to obj["importance"].int64OrNull()
+    val value = obj["value"] as? JsonObject ?: unusable("getPlace body has no value object")
+    return PlaceAnswer(value, obj["importance"].int64OrNull(), readAttribution(obj["attribution"]).orEmpty())
 }
 
 private fun JsonObject.string(key: String): String? = this[key].stringOrNull()
@@ -123,6 +152,7 @@ internal fun readServiceDescription(body: JsonElement): ServiceDescription {
     val obj = body as? JsonObject ?: unusable("describeService body is not an object")
     return ServiceDescription(
         did = obj.string("did"),
+        maxTiles = obj["maxTiles"].int64OrNull(),
         tilesets = obj.objects("tilesets") {
             ServiceDescription.ServedTileset(it.string("slug"), it.objects("collections", ::collectionRef).orEmpty())
         }.orEmpty(),
@@ -140,5 +170,6 @@ internal fun readTileset(body: JsonElement): Tileset {
         },
         collections = obj.objects("collections", ::collectionInfo).orEmpty(),
         references = obj.objects("references", ::attribution),
+        overview = (obj["overview"] as? JsonObject)?.let { Tileset.Overview(it["records"].int64OrNull()) },
     )
 }

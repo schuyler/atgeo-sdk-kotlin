@@ -25,7 +25,7 @@ class MainActivity : Activity() {
         // Called from the main thread; the client parses and ranks on Dispatchers.Default.
         scope.launch {
             view.text = try {
-                val result = atgeo.searchPlaces(Region.Circle(43.0, -71.45, 3000.0), text = "pizza")
+                val result = atgeo.searchPlaces(Region.Circle(43.0, -71.45, 3000.0), "overturemaps.org", text = "pizza", collection = "place")
                 result.places.take(20).joinToString("\n") { hit ->
                     val name = hit.name ?: "(unnamed)"
                     "%s, %.0f m, score %.2f".format(name, hit.distance, hit.score ?: 0.0)

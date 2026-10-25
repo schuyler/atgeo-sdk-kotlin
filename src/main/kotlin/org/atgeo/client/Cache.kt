@@ -57,12 +57,15 @@ internal class TileCache(private val budget: Long) {
  * [TileCache] still holds the same entry, so what is fetched, and when, is exactly as without it.
  */
 internal class ParsedTiles {
-    private var tiles: Map<String, Pair<TileCache.Entry, List<TileRecord>>> = emptyMap()
+    /** A tile's usable records and its attribution (empty when it has none), as parsed from the entry's body. */
+    class Parsed(val entry: TileCache.Entry, val records: List<TileRecord>, val attribution: List<Attribution>)
 
-    fun get(url: String, entry: TileCache.Entry): List<TileRecord>? = tiles[url]?.takeIf { it.first === entry }?.second
+    private var tiles: Map<String, Parsed> = emptyMap()
+
+    fun get(url: String, entry: TileCache.Entry): Parsed? = tiles[url]?.takeIf { it.entry === entry }
 
     /** Replaces the memo with one search's tiles. */
-    fun replace(tiles: Map<String, Pair<TileCache.Entry, List<TileRecord>>>) {
+    fun replace(tiles: Map<String, Parsed>) {
         this.tiles = tiles
     }
 }

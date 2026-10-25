@@ -13,6 +13,8 @@ class FixturesTest {
         assertEquals(41, (fixture("normalize.json") as JsonArray).size)
         assertEquals(33, (fixture("jaro-winkler.json") as JsonArray).size)
         assertEquals(12, (fixture("ranking-scenarios.json") as JsonArray).size)
+        assertEquals(104, (fixture("lenient-readers.json") as JsonArray).size)
+        assertEquals(12, (fixture("attribution-scenarios.json") as JsonArray).size)
     }
 
     @Test

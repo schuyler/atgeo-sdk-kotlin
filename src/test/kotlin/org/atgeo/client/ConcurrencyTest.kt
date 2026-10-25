@@ -48,7 +48,7 @@ class ConcurrencyTest {
                 inFlight.decrementAndGet()
             }
         }
-        val result = AtgeoClient(transport = transport, computeDispatcher = Dispatchers.Default).searchPlaces(region)
+        val result = AtgeoClient(transport = transport, computeDispatcher = Dispatchers.Default).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
         assertEquals(SearchResult.TileCounts(fetched = 30, failed = 0), result.tiles)
         assertEquals(30, result.places.size)
         assertEquals(8, peak.get())
@@ -65,7 +65,7 @@ class ConcurrencyTest {
             awaitCancellation()
         }
         val client = AtgeoClient(transport = transport, computeDispatcher = Dispatchers.Default)
-        val search = async(Dispatchers.Default) { client.searchPlaces(region) }
+        val search = async(Dispatchers.Default) { client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION) }
         withTimeout(5_000) { eightStarted.await() }
         val started = System.nanoTime()
         search.cancel()
@@ -88,7 +88,7 @@ class ConcurrencyTest {
         val transport = HttpTransport { url ->
             if (url != tileUrl("t08") && "/xrpc/" !in url) withTimeout(10) { awaitCancellation() } else server.get(url)
         }
-        val result = client(transport).searchPlaces(region)
+        val result = client(transport).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
         assertEquals(SearchResult.TileCounts(fetched = 1, failed = 8), result.tiles)
         assertEquals(false, result.complete)
         assertEquals(listOf(placeOrigin("p8")), result.places.map { it.origin })
@@ -100,7 +100,7 @@ class ConcurrencyTest {
     fun `reports a transport timeout on an XRPC call as SocketTimeoutException`() = runTest {
         val c = client(HttpTransport { withTimeout(10) { awaitCancellation() } })
         val calls: List<suspend () -> Unit> = listOf(
-            { c.searchPlaces(region) },
+            { c.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION) },
             { c.getPlace(placeOrigin("p0")) },
             { c.describeService() },
             { c.describeTileset("overture-place") },
@@ -113,7 +113,7 @@ class ConcurrencyTest {
 
     @Test
     fun `reports any other transport CancellationException as IOException`() = runTest {
-        val error = assertFailsWith<IOException> { client(HttpTransport { throw CancellationException("gave up") }).searchPlaces(region) }
+        val error = assertFailsWith<IOException> { client(HttpTransport { throw CancellationException("gave up") }).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION) }
         assertTrue(causes(error).any { it is CancellationException })
     }
 
@@ -121,7 +121,7 @@ class ConcurrencyTest {
     fun `still propagates the caller's cancellation from getTiles`() = runBlocking {
         val started = CompletableDeferred<Unit>()
         val client = AtgeoClient(transport = { started.complete(Unit); awaitCancellation() }, computeDispatcher = Dispatchers.Default)
-        val search = async(Dispatchers.Default) { client.searchPlaces(region) }
+        val search = async(Dispatchers.Default) { client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION) }
         withTimeout(5_000) { started.await() }
         search.cancel()
         assertIs<CancellationException>(runCatching { search.await() }.exceptionOrNull())
@@ -132,6 +132,6 @@ class ConcurrencyTest {
     fun `lets an Error from a tile fetch fail the search rather than count as a failed tile`() = runTest {
         val server = manyTiles(2)
         val transport = HttpTransport { url -> if (url == tileUrl("t01")) throw OutOfMemoryError("probe") else server.get(url) }
-        assertFailsWith<OutOfMemoryError> { client(transport).searchPlaces(region) }
+        assertFailsWith<OutOfMemoryError> { client(transport).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION) }
     }
 }

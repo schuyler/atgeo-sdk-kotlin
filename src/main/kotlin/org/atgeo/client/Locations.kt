@@ -159,13 +159,13 @@ internal fun distanceTo(locations: Locations, lat: Double, lon: Double): Double?
 
 internal fun inRegion(locations: Locations, region: Region): Boolean = when (region) {
     is Region.Bbox -> {
-        val segments = lonSegments(region.minLon, region.maxLon)
+        val segments = lonSegments(region.west, region.east)
         val point = locations.point
         val bbox = locations.bbox
         if (point != null) {
-            covers(region.minLat, region.maxLat, segments, point.lat, point.lon)
+            covers(region.south, region.north, segments, point.lat, point.lon)
         } else {
-            bbox != null && meets(bbox, region.minLat, region.maxLat, segments)
+            bbox != null && meets(bbox, region.south, region.north, segments)
         }
     }
     is Region.Circle -> {

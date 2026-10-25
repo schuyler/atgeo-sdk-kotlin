@@ -14,14 +14,11 @@ import kotlin.math.sqrt
 
 /** Where to search. Neither class validates on construction; [AtgeoClient.searchPlaces] does (contract §3). */
 public sealed interface Region {
-    /** A circle; `radius` in metres. Latitude first, unlike [Bbox]: name the arguments. */
+    /** A circle; `radius` in metres. */
     public data class Circle(val lat: Double, val lon: Double, val radius: Double) : Region
 
-    /**
-     * A box in degrees, longitude first (GeoJSON's order), unlike [Circle]: name the arguments, since
-     * validation cannot catch most swaps. `minLon > maxLon` crosses the antimeridian.
-     */
-    public data class Bbox(val minLon: Double, val minLat: Double, val maxLon: Double, val maxLat: Double) : Region
+    /** A box in degrees, in the order of the getTiles bbox string. `west > east` crosses the antimeridian. */
+    public data class Bbox(val west: Double, val south: Double, val east: Double, val north: Double) : Region
 }
 
 private const val DEG_TO_M = 111194.927
@@ -38,9 +35,9 @@ internal fun validateRegion(region: Region) {
     fun ok(n: Double, limit: Double) = n.isFinite() && abs(n) <= limit
     when (region) {
         is Region.Bbox -> require(
-            ok(region.minLon, 180.0) && ok(region.maxLon, 180.0) &&
-                ok(region.minLat, 90.0) && ok(region.maxLat, 90.0) &&
-                region.minLat <= region.maxLat,
+            ok(region.west, 180.0) && ok(region.east, 180.0) &&
+                ok(region.south, 90.0) && ok(region.north, 90.0) &&
+                region.south <= region.north,
         ) { "invalid bbox" }
         is Region.Circle -> require(
             ok(region.lat, 90.0) && ok(region.lon, 180.0) && region.radius.isFinite() && region.radius >= 0,
@@ -51,13 +48,13 @@ internal fun validateRegion(region: Region) {
 internal fun center(region: Region): LatLon = when (region) {
     is Region.Circle -> LatLon(region.lat, region.lon)
     is Region.Bbox -> {
-        var lon = if (region.minLon <= region.maxLon) {
-            (region.minLon + region.maxLon) / 2
+        var lon = if (region.west <= region.east) {
+            (region.west + region.east) / 2
         } else {
-            (region.minLon + region.maxLon + 360) / 2
+            (region.west + region.east + 360) / 2
         }
         if (lon > 180) lon -= 360
-        LatLon((region.minLat + region.maxLat) / 2, lon)
+        LatLon((region.south + region.north) / 2, lon)
     }
 }
 
@@ -124,7 +121,7 @@ private fun fixed(units: Long): String {
 /** The snapped getTiles bbox strings, one per antimeridian half, in call order (contract §3). */
 internal fun queryBboxes(region: Region): List<String> {
     val box = when (region) {
-        is Region.Bbox -> doubleArrayOf(region.minLon, region.minLat, region.maxLon, region.maxLat)
+        is Region.Bbox -> doubleArrayOf(region.west, region.south, region.east, region.north)
         is Region.Circle -> circleBox(region.lat, region.lon, region.radius)
     }
     val (lat0, lat1) = snapSpan(box[1], box[3], 90)

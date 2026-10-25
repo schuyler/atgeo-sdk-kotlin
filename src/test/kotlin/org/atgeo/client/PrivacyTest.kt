@@ -39,7 +39,7 @@ class PrivacyTest {
                 dynamicTest("does not put \"$text\" on the wire") {
                     runTest {
                         val fake = server()
-                        client(fake).searchPlaces(Region.Circle(37.7749295, -122.4194155, 500.0), text = text)
+                        client(fake).searchPlaces(Region.Circle(37.7749295, -122.4194155, 500.0), OVERTURE_DATASET, text = text, collection = OVERTURE_COLLECTION)
                         assertTrue(fake.requests.isNotEmpty())
                         val normalized = "zanzibar quokka"
                         val needles = listOf(text.lowercase(), text.trim().lowercase(), normalized) + normalized.split(" ") + listOf("zanzib", "quokka")
@@ -54,7 +54,7 @@ class PrivacyTest {
         @Test
         fun `issues only getTiles and tile requests`() = runTest {
             val fake = server()
-            client(fake).searchPlaces(Region.Circle(37.7749295, -122.4194155, 500.0), text = "Zanzibar Quokka")
+            client(fake).searchPlaces(Region.Circle(37.7749295, -122.4194155, 500.0), OVERTURE_DATASET, text = "Zanzibar Quokka", collection = OVERTURE_COLLECTION)
             val kinds = fake.requests.map { if ("/xrpc/org.atgeo.getTiles?" in it) "tiles" else if (it == TILE) "tile" else it }
             assertEquals(listOf("tiles", "tile"), kinds)
             // Every request is a GET: HttpTransport has no other method.
@@ -76,7 +76,7 @@ class PrivacyTest {
                 }
             }
             val text = "  ZANZIBÁR   quokka "
-            val result = client(transport).searchPlaces(Region.Circle(37.7749295, -122.4194155, 500.0), text = text)
+            val result = client(transport).searchPlaces(Region.Circle(37.7749295, -122.4194155, 500.0), OVERTURE_DATASET, text = text, collection = OVERTURE_COLLECTION)
             assertEquals(
                 listOf(TileFailure.Kind.STATUS, TileFailure.Kind.DECODE, TileFailure.Kind.TRANSPORT, TileFailure.Kind.STATUS),
                 result.tileFailures.map { it.kind },
@@ -92,7 +92,7 @@ class PrivacyTest {
         @Test
         fun `sends no body`() = runTest {
             val fake = server()
-            client(fake).searchPlaces(Region.Bbox(-122.43, 37.77, -122.41, 37.78), text = "Zanzibar Quokka")
+            client(fake).searchPlaces(Region.Bbox(-122.43, 37.77, -122.41, 37.78), OVERTURE_DATASET, text = "Zanzibar Quokka", collection = OVERTURE_COLLECTION)
             assertTrue(fake.requests.isNotEmpty())
             // HttpTransport.get(url) carries no body.
         }
@@ -104,7 +104,7 @@ class PrivacyTest {
         @Test
         fun `keeps the circle centre off the wire`() = runTest {
             val fake = server()
-            client(fake).searchPlaces(Region.Circle(37.7749295, -122.4194155, 123.456789), text = "Zanzibar Quokka")
+            client(fake).searchPlaces(Region.Circle(37.7749295, -122.4194155, 123.456789), OVERTURE_DATASET, text = "Zanzibar Quokka", collection = OVERTURE_COLLECTION)
             assertTrue(fake.requests.isNotEmpty())
             for (h in wire(fake.requests)) {
                 for (needle in listOf("37.7749295", "122.4194155", "7749295", "4194155", "123.456789")) assertFalse(needle in h, h)
@@ -114,7 +114,7 @@ class PrivacyTest {
         @Test
         fun `keeps full-precision bbox corners off the wire`() = runTest {
             val fake = server()
-            client(fake).searchPlaces(Region.Bbox(-122.4194155, 37.7749295, -122.4094155, 37.7849295))
+            client(fake).searchPlaces(Region.Bbox(-122.4194155, 37.7749295, -122.4094155, 37.7849295), OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertTrue(fake.requests.isNotEmpty())
             for (h in wire(fake.requests)) {
                 for (needle in listOf("7749295", "4194155", "4094155", "7849295")) assertFalse(needle in h, h)

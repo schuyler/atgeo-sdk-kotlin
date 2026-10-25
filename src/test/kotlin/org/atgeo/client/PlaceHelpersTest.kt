@@ -12,7 +12,7 @@ import kotlin.test.assertNull
 
 /** The public readers of a place: stringOrNull, name and location (no reference counterpart). */
 class PlaceHelpersTest {
-    private fun hit(place: JsonObject) = SearchHit(null, place, null, 0.0, null)
+    private fun hit(place: JsonObject) = SearchHit(null, null, place, null, 0.0, null)
 
     @Nested
     inner class StringOrNull {
@@ -89,7 +89,7 @@ class PlaceHelpersTest {
         @Test
         fun `is the location a search measured distance from`() = runTest {
             val server = FakeServer(tilesets = listOf(overture(listOf(FakeTile(tileUrl("a"), listOf(record(place("p", "P", listOf(point(43.0, -71.45))))))))))
-            val found = client(server).searchPlaces(Region.Circle(lat = 43.0, lon = -71.45, radius = 100.0)).places.single()
+            val found = client(server).searchPlaces(Region.Circle(lat = 43.0, lon = -71.45, radius = 100.0), OVERTURE_DATASET, collection = OVERTURE_COLLECTION).places.single()
             assertEquals(0.0, found.distance)
             assertEquals(PlaceLocation.Point(43.0, -71.45), found.location.point)
             assertEquals("P", found.name)

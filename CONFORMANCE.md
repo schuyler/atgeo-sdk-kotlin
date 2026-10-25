@@ -1,6 +1,6 @@
 # Conformance notes
 
-Where this port reads input differently from the TypeScript reference, within the freedoms the [port contract](https://github.com/schuyler/atgeo-sdk-js/blob/main/docs/port-contract.md) grants (§5, §14). A compliant server never sends any of these; they matter only for malformed data.
+This port follows the port contract at atgeo-sdk-js `2710a14ba7d9485ddb6c00975f396e95389ac419` (fixtures and lexicons pinned in the `SOURCE` files under `src/test/resources/fixtures/`, which CI checks byte for byte). Where this port reads input differently from the TypeScript reference, within the freedoms the [port contract](https://github.com/schuyler/atgeo-sdk-js/blob/main/docs/port-contract.md) grants (§5, §14). A compliant server never sends any of these; they matter only for malformed data.
 
 ## Number parsing (contract §5)
 
@@ -56,3 +56,15 @@ A URL the check accepts can still fail in the transport where WHATWG would have 
 The reference orders by subtracting (`a.distance - b.distance`), so a NaN distance compares as a tie with everything, which makes the comparator inconsistent and the resulting order engine-defined. Only out-of-range coordinates in place data (a latitude past ±90) can produce one. This port compares instead of subtracting, ties `-0` with `0` exactly as subtraction does, and sorts a NaN after every number, because Java's sort may throw on an inconsistent comparator.
 
 The number table and the unquoted literal are pinned by tests in `WireTest`, the NaN ordering in `RankingTest`. The final-sigma cases are not: they are the JDK's behaviour, not a choice this port makes.
+
+## A null dataset (contract §4.1)
+
+`dataset` is a non-null `String`, which is the contract's "non-optional type": a search without one does not compile. The one way past it is a caller that passes `null` (Java, reflection). The Kotlin compiler emits no null check for the parameters of a `suspend` function, so `searchPlaces` checks for itself and throws `IllegalArgumentException` mentioning `dataset`, as its first statement, before the region is validated and before any request. Pinned by `ClientTest` (`DatasetsAndCollections`), which calls the method reflectively.
+
+## Attribution (contract §4.10, §9)
+
+`Attribution` copies `licenses` into an unmodifiable list, and the lists `searchPlaces` and `getPlace` return are unmodifiable copies, so a cast to `MutableList` throws instead of reaching the cache (the reference copies instead of freezing; contract §9 allows either). `SearchHit.collection` is a nullable `CollectionKey`, so the contract's "always present, an object or null" holds by type. The sort uses `String.compareTo`, which is UTF-16 code unit order, as §4.3 asks; `AttributionScenariosTest` pins it above U+FFFF, which the fixtures do not.
+
+## What the tests run
+
+The port runs every vendored fixture: `normalize.json`, `jaro-winkler.json`, `ranking-scenarios.json` (`RankingTest`, with each scenario's dataset and collection), `lenient-readers.json` (`LenientReadersTest`, all 104 cases, compared as JSON) and `attribution-scenarios.json` (`AttributionScenariosTest`, a fresh client per scenario against a raw server, with the default error body for a tile that has a status and no body). The same test class reruns every multi-tile scenario with the highest tile URL answering first (virtual-time delays) to pin that attribution and hit collections follow URL order, not arrival order (contract §13). The fake server does not validate against the lexicons; it checks parameter names, the bbox format and its own response fields, as §13 allows where no validator exists.
