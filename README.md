@@ -14,7 +14,9 @@ val atgeo = AtgeoClient()
 
 val result = atgeo.searchPlaces(
     region = Region.Circle(lat = 43.0, lon = -71.45, radius = 3000.0), // metres
+    dataset = "overturemaps.org",
     text = "pizza",
+    collection = "place",
 )
 
 for (hit in result.places) {
@@ -23,7 +25,7 @@ for (hit in result.places) {
 }
 ```
 
-`searchPlaces` is a `suspend` function; call it from any coroutine, the main thread included. Misspellings are fine; matching is fuzzy. If `complete` is `false`, some tiles failed to load and the results are partial; `tileFailures` says which and why. If `overview` is `true`, the region was too big to search in full and you got only its most important places.
+`searchPlaces` is a `suspend` function; call it from any coroutine, the main thread included. Misspellings are fine; matching is fuzzy. If `complete` is `false`, some tiles failed to load and the results are partial; `tileFailures` says which and why. If `overview` is `true`, the region was too big to search in full and you got only its most important places. `result.attribution` lists whose data you're showing; credit them.
 
 ## Installation
 
@@ -69,17 +71,17 @@ Whatever transport you use, don't give it a disk cache, or the client's promise 
 
 ## API
 
-### `searchPlaces(region, text?, dataset?, collection?, sort?): SearchResult`
+### `searchPlaces(region, dataset, text?, collection?, sort?): SearchResult`
 
 | Parameter | Meaning |
 |---|---|
-| `region` | Required. `Region.Circle(lat, lon, radius)` with the radius in metres, or `Region.Bbox(minLon, minLat, maxLon, maxLat)` in degrees. Note the order: a circle is latitude first, a box longitude first (GeoJSON's order), so name the arguments. A bbox with `minLon > maxLon` crosses the antimeridian. |
+| `region` | Required. `Region.Circle(lat, lon, radius)` with the radius in metres, or `Region.Bbox(west, south, east, north)` in degrees, the order of the wire's bbox string. A bbox with `west > east` crosses the antimeridian. |
 | `text` | Optional search text, matched fuzzily against each place's `name` and its `variants[].name` after lowercasing and stripping accents and extra whitespace. Places scoring below 0.6 are dropped. |
-| `dataset` | Optional, such as `openstreetmap.org`. Defaults to `overturemaps.org`. |
-| `collection` | Optional, such as `way`. |
+| `dataset` | Required, such as `overturemaps.org` or `openstreetmap.org`. There is no default. An empty string is sent to the server as it is. |
+| `collection` | Optional, such as `place` or `way`. |
 | `sort` | `SortMode.FUSED` (default), `DISTANCE` or `SIMILARITY`. |
 
-With neither `dataset` nor `collection` you search `overturemaps.org` / `place`; with only `collection`, that collection of `overturemaps.org`; with only `dataset`, every collection of that dataset together; with both, that collection.
+With only a `dataset` you search every collection of it together; with a `collection` too, that collection alone.
 
 ```kotlin
 class SearchResult(
@@ -88,7 +90,15 @@ class SearchResult(
     val overview: Boolean,        // true if the server answered with its coarse overview
     val tiles: TileCounts,        // fetched and failed
     val tileFailures: List<TileFailure>, // each failed tile, in tile URL order; empty if complete
+    val attribution: List<Attribution>,  // credit for every collection in the tiles used; sorted; never null
 )
+
+class Attribution(                // one collection's credit; read-only, and so is `licenses`
+    val dataset: String, val collection: String,
+    val release: String?, val source: String?, val licenses: List<String>?, val attribution: String?,
+)
+
+class CollectionKey(val dataset: String, val collection: String)
 
 class TileFailure(
     val url: String,              // the tile URL the server listed
@@ -99,6 +109,7 @@ class TileFailure(
 
 class SearchHit(
     val origin: String?,          // place.origin, else the tile record's uri, else null
+    val collection: CollectionKey?, // which collection the place belongs to; null if its tile doesn't say
     val place: JsonObject,        // the record value, exactly as served
     val importance: Long?,        // relative to its tileset; null if it has none
     val distance: Double,         // metres from the region's centre to the nearest point of the place; 0 if it contains the centre
@@ -113,26 +124,28 @@ These are plain classes rather than data classes, so that later versions can add
 
 `place` is the gazetteer's record untouched. `name` and `location` save you the two reads every app needs: `location.point` is the first usable `geo` entry of `place.locations`, `location.bbox` the first usable `bbox` entry (`west > east` crosses the antimeridian), coordinates already parsed from the strings they arrive as. For any other field, `place["field"].stringOrNull()` gives a string field or `null`, without the casts `JsonElement` otherwise needs. `PlaceRecord` has the same `name` and `location`.
 
+`attribution` is the union of what every tile the search used says about its data, one entry per dataset and collection (the first tile in URL order wins), sorted by dataset then collection. It includes collections the tile only references, so a hit's neighbouring division is credited too, and it counts tiles whose places were all filtered out. `collection` is matched against the tile the hit came from, on `place.origin` alone: a hit identified only by its uri has none. Nothing you do to either, `licenses` included, changes the cache.
+
 `FUSED` orders by similarity, breaking near-ties by importance, then distance. `DISTANCE` orders nearest first, then the smaller place, then importance, then similarity. `SIMILARITY` orders by similarity, then distance, and needs `text`. Scores are compared to three decimals and remaining ties break on `origin`, so the order is deterministic.
 
 The [JavaScript README](https://github.com/schuyler/atgeo-sdk-js#readme) has the long version: overview answers, places that appear in several tiles, and how ties are broken. All of it applies here unchanged.
 
 ### `getPlace(origin): PlaceRecord`
 
-Returns `PlaceRecord(origin, place, importance)` for the `origin` of a hit. If a cached tile holds the place, no request is made; otherwise the client asks the server directly.
+Returns `PlaceRecord(origin, place, importance, attribution)` for the `origin` of a hit, where `attribution` is the credit for the place's collections, in the order the server or the cached tile gave it (empty if it gave none). If a cached tile holds the place, no request is made; otherwise the client asks the server directly.
 
 ### `describeService(): ServiceDescription`
 
-The server's DID and the tilesets it serves. Cached for an hour.
+The server's DID, its tile budget (`maxTiles`, informational) and the tilesets it serves. Cached for an hour.
 
 ### `describeTileset(slug): Tileset`
 
-A tileset's collections, attribution and extent. Not cached. The describe types are read leniently: a field that is missing or of the wrong type comes back `null`, never as an exception. They're `@Serializable` in case you want to store them.
+A tileset's collections, attribution, extent and `overview` (`overview.records`, the number of records in its overview band, when it has one). Not cached. The describe types are read leniently: a field that is missing or of the wrong type comes back `null`, never as an exception. They're `@Serializable` in case you want to store them.
 
 ### Errors
 
 - `AtgeoException` has the server's error `code` (`PlaceNotFound`, `BboxTooLarge`, `DatasetNotFound` and so on), or `HttpError` when the server didn't send one, and the HTTP `status`. Use `status` to tell a request the server refused (4xx) from one it failed to answer (5xx); codes are an open list and new ones may appear.
-- `searchPlaces` throws `IllegalArgumentException` for an invalid region or for `SIMILARITY` without text, before any request.
+- `searchPlaces` throws `IllegalArgumentException` for an invalid region or for `SIMILARITY` without text, before any request. `dataset` is a non-null `String`, so leaving it out doesn't compile; a caller that passes `null` anyway (from Java, say) gets an `IllegalArgumentException` mentioning `dataset`, before the region is even looked at.
 - A failed `getTiles` fails the search. A failed tile does not: it's skipped, counted in `tiles.failed`, listed in `tileFailures`, and `complete` is `false`. Each entry says where the tile failed. `REFUSED`: the server listed a URL that isn't an absolute `http` or `https` URL, or that has a username or password in it, and no request was made. `STATUS`: the tile answered outside 2xx, and `status` and an `AtgeoException` say how. `DECODE`: a 2xx whose body isn't a tile payload. `TRANSPORT`: the transport threw, and `error` is what it threw, so a body over `maxBodyBytes`, a timeout, or a bug in a transport of your own shows up here rather than vanishing into a count. Two results with the same failures are equal whatever their `error`s say. The library logs nothing; what you do with `tileFailures` is up to you, and nothing about a failure is sent anywhere.
 - A 2xx body with nothing usable in it, or that isn't JSON, throws `AtgeoDecodingException`, an `IOException`: as far as your app is concerned the answer didn't arrive. Retrying rarely helps; the server sends the same body again. Network errors come through as whatever the transport throws, usually `IOException`. A transport that gives up by throwing `CancellationException` while your coroutine is still running (its own `withTimeout`, say) is reported as `SocketTimeoutException`, or as `IOException` for anything but a timeout, so that it can't end your coroutine silently.
 - Cancelling the calling coroutine stops the search and throws `CancellationException`.
@@ -167,9 +180,9 @@ Most of this port was written by Claude, working from the spec and the reference
 ATGEO_SERVER=http://localhost:8000 ./gradlew e2e
 ```
 
-The end-to-end check takes the same `ATGEO_SERVER`, `ATGEO_DATASET`, `ATGEO_COLLECTION` and `ATGEO_REGION` variables as the JavaScript one.
+The end-to-end check takes the same `ATGEO_SERVER`, `ATGEO_DATASET`, `ATGEO_COLLECTION` and `ATGEO_REGION` variables as the JavaScript one. It can't pass until a server with garganorn#27 is deployed, because `getPlace` answers differently now. It still runs, and it's not skipped.
 
-`src/test/resources/fixtures/` holds the shared fixtures, copied from atgeo-sdk-js at the commit named in `SOURCE`, and the garganorn lexicons, with their own `SOURCE`.
+`src/test/resources/fixtures/` holds the shared fixtures, copied from atgeo-sdk-js at the commit named in `SOURCE` (`./gradlew test` runs `lenient-readers.json` and `attribution-scenarios.json` along with the rest), and the garganorn lexicons, with their own `SOURCE`.
 
 ## License
 
