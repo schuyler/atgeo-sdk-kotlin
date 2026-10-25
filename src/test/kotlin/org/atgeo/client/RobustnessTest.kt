@@ -42,7 +42,7 @@ private fun tileServing(records: String) = FakeServer(
 )
 
 /**
- * Contract §16: reference behaviours a port must not reproduce (crashes, wrong counts, laxer typing).
+ * Contract §1: what a search, getPlace and the describe calls do with a malformed body (the reference crashes or miscounts on some).
  * The reference crashes on these, so the JS suite cannot test them.
  */
 class RobustnessTest {

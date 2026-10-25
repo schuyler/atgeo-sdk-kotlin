@@ -79,6 +79,10 @@ public class AtgeoClient internal constructor(
         collection: String? = null,
         sort: SortMode = SortMode.FUSED,
     ): SearchResult {
+        // The Kotlin compiler emits no null check for the parameters of a suspend function, so a caller that
+        // passes null (Java, reflection) gets the argument error here, before the region is looked at (contract §4.1).
+        @Suppress("SENSELESS_COMPARISON")
+        require(dataset != null) { "dataset is required" }
         validateRegion(region)
         val query = normalize(text ?: "")
         require(sort != SortMode.SIMILARITY || query.isNotEmpty()) { "sort SIMILARITY requires text" }
@@ -114,15 +118,22 @@ public class AtgeoClient internal constructor(
         }
         val used = urls.indices.mapNotNull { i -> (slots[i] as? TileOutcome.Used)?.let { urls[i] to it } }
         val tileFailures = slots.mapNotNull { (it as? TileOutcome.Failed)?.failure }
-        mutex.withLock { parsed.replace(used.associate { (url, tile) -> url to (tile.entry to tile.records) }) }
+        mutex.withLock { parsed.replace(used.associate { (url, tile) -> url to ParsedTiles.Parsed(tile.entry, tile.records, tile.attribution) }) }
 
-        val prefix = collection?.let { "urn:atgeo:$dataset:$it:" }
+        val prefix = collection?.let { collectionPrefix(dataset, it) }
+        // Each record knows its tile's attribution, for the hit's collection (contract §8).
+        val tileOf = java.util.IdentityHashMap<TileRecord, List<Attribution>>()
+        for ((_, tile) in used) for (r in tile.records) tileOf[r] = tile.attribution
         // dedupe picks a winner before the region filter runs, as the reference does (contract §4.6).
         val records = dedupe(used.flatMap { (_, tile) -> tile.records })
-            .filter { prefix == null || it.value["origin"].stringOrNull()?.startsWith(prefix) == true }
+            .filter { prefix == null || inCollection(it.value, prefix) }
             .filter { inRegion(locate(it.value), region) }
+        val attribution = mergeAttribution(used.map { (_, tile) -> tile.attribution })
         val counts = SearchResult.TileCounts(fetched = used.size, failed = tileFailures.size)
-        SearchResult(rank(records, region, query, sort), tileFailures.isEmpty(), overview, counts, tileFailures, emptyList())
+        SearchResult(
+            rank(records, region, query, sort) { r -> collectionOf(r.value, tileOf.getValue(r)) },
+            tileFailures.isEmpty(), overview, counts, tileFailures, attribution,
+        )
     }
 
     private suspend fun tileList(dataset: String, collection: String?, bbox: String): TileList {
@@ -139,7 +150,7 @@ public class AtgeoClient internal constructor(
     }
 
     private sealed interface TileOutcome {
-        class Used(val entry: TileCache.Entry, val records: List<TileRecord>) : TileOutcome
+        class Used(val entry: TileCache.Entry, val records: List<TileRecord>, val attribution: List<Attribution>) : TileOutcome
 
         class Failed(val failure: TileFailure) : TileOutcome
     }
@@ -159,11 +170,11 @@ public class AtgeoClient internal constructor(
             val error = MalformedURLException("tile URL is not an absolute http or https URL without credentials")
             return TileOutcome.Failed(TileFailure(url, TileFailure.Kind.REFUSED, null, error))
         }
-        mutex.withLock { tiles.get(url)?.let { it to parsed.get(url, it) } }?.let { (entry, records) ->
-            if (records != null) return TileOutcome.Used(entry, records)
+        mutex.withLock { tiles.get(url)?.let { it to parsed.get(url, it) } }?.let { (entry, memo) ->
+            if (memo != null) return TileOutcome.Used(entry, memo.records, memo.attribution)
             // A cached body parsed once already, so a deterministic parser cannot fail on it again.
             return try {
-                TileOutcome.Used(entry, decodeTile(entry.body))
+                decodeTile(entry.body).let { TileOutcome.Used(entry, it.records, it.attribution.orEmpty()) }
             } catch (e: Exception) {
                 currentCoroutineContext().ensureActive()
                 TileOutcome.Failed(TileFailure(url, TileFailure.Kind.DECODE, null, e))
@@ -171,7 +182,7 @@ public class AtgeoClient internal constructor(
         }
         var kind = TileFailure.Kind.TRANSPORT
         var status: Int? = null
-        val (body, records) = try {
+        val (body, payload) = try {
             val response = xrpc.send(url)
             kind = TileFailure.Kind.STATUS
             status = response.status
@@ -183,16 +194,16 @@ public class AtgeoClient internal constructor(
             currentCoroutineContext().ensureActive()
             return TileOutcome.Failed(TileFailure(url, kind, status, e))
         }
-        val entry = TileCache.Entry(body, records.mapNotNullTo(HashSet()) { recordKey(it) })
+        val entry = TileCache.Entry(body, payload.records.mapNotNullTo(HashSet()) { recordKey(it) })
         mutex.withLock { tiles.set(url, entry) }
-        return TileOutcome.Used(entry, records)
+        return TileOutcome.Used(entry, payload.records, payload.attribution.orEmpty())
     }
 
     // The server's input caused a stack overflow in the decoder, so it is a decode failure (contract §4.4);
     // only that Error, never Error in general. kotlinx.serialization refuses deep nesting with a
     // SerializationException before it can overflow, so this is a guard for later versions.
-    private fun decodeTile(body: ByteArray): List<TileRecord> = try {
-        readTilePayload(parseBody(body)).records
+    private fun decodeTile(body: ByteArray): TilePayload = try {
+        readTilePayload(parseBody(body))
     } catch (e: StackOverflowError) {
         throw AtgeoDecodingException("tile payload is too deeply nested", e)
     }
@@ -208,13 +219,15 @@ public class AtgeoClient internal constructor(
         // caller's thread. Within that tile the first record with the key wins.
         val cached = withContext(computeDispatcher) {
             val found = mutex.withLock { tiles.find(origin)?.let { (url, entry) -> entry to parsed.get(url, entry) } }
-            found?.let { (entry, records) ->
-                (records ?: readTilePayload(parseBody(entry.body)).records).first { recordKey(it) == origin }
+            found?.let { (entry, memo) ->
+                val tile = memo?.let { it.records to it.attribution } ?: readTilePayload(parseBody(entry.body)).let { it.records to it.attribution.orEmpty() }
+                tile.first.first { recordKey(it) == origin } to tile.second
             }
         }
-        if (cached != null) return PlaceRecord(origin, cached.value, cached.importance, emptyList())
+        // The attribution is the source tile's, as served; a copy, so that changing the answer changes nothing cached.
+        if (cached != null) return PlaceRecord(origin, cached.first.value, cached.first.importance, frozen(cached.second))
         val answer = readPlace(xrpc.query("org.atgeo.getPlace", listOf("uri" to origin)))
-        return PlaceRecord(origin, answer.value, answer.importance, answer.attribution)
+        return PlaceRecord(origin, answer.value, answer.importance, frozen(answer.attribution))
     }
 
     /** What the server serves. Cached for an hour. */

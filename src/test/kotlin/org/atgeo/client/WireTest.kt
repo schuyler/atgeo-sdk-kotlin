@@ -249,6 +249,8 @@ class WireTest {
         fun `reads an overview that is not an object as absent and its unreadable records as absent`(): List<DynamicTest> = listOf(
             "null" to null, "[]" to null, "5" to null, "\"x\"" to null, "{}" to Tileset.Overview(null),
             """{"records": "9"}""" to Tileset.Overview(null), """{"records": 7}""" to Tileset.Overview(7),
+            // Read as an importance is (contract §1): zero and negatives are numbers, and are kept.
+            """{"records": 0}""" to Tileset.Overview(0), """{"records": -5}""" to Tileset.Overview(-5),
         ).map { (text, expected) -> dynamicTest("overview $text") { assertEquals(expected, readTileset(json("""{"overview": $text}""")).overview) } }
 
         @TestFactory

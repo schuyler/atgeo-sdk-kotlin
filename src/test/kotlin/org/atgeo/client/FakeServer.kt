@@ -112,7 +112,7 @@ internal class FakeServer(
     // Replaces the whole getTiles answer after dataset and collection selection has passed.
     private val tilesFor: ((bbox: String) -> TilesAnswer)? = null,
     private val failTiles: Set<String> = emptySet(),
-    // Raw responses by URL, bypassing routing and validation (contract §16 bodies).
+    // Raw responses by URL, bypassing routing and validation (the malformed bodies of contract §1).
     private val responses: Map<String, HttpResponse> = emptyMap(),
 ) : HttpTransport {
     // A client on a multi-threaded dispatcher calls get() from several threads.

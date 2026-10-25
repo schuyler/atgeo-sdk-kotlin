@@ -2,6 +2,8 @@ package org.atgeo.client
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
+import java.util.ArrayList
+import java.util.Collections
 import java.util.Objects
 
 /** How [AtgeoClient.searchPlaces] orders its results (contract §8). */
@@ -99,9 +101,12 @@ public class Attribution internal constructor(
     public val collection: String,
     public val release: String? = null,
     public val source: String? = null,
-    public val licenses: List<String>? = null,
+    licenses: List<String>? = null,
     public val attribution: String? = null,
 ) {
+    /** The licenses as served; a copy that cannot be changed, through a cast or otherwise. */
+    public val licenses: List<String>? = licenses?.let { Collections.unmodifiableList(ArrayList(it)) }
+
     override fun equals(other: Any?): Boolean = other is Attribution && dataset == other.dataset && collection == other.collection &&
         release == other.release && source == other.source && licenses == other.licenses && attribution == other.attribution
     override fun hashCode(): Int = Objects.hash(dataset, collection, release, source, licenses, attribution)
