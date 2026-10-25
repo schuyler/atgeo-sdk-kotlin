@@ -76,8 +76,8 @@ Whatever transport you use, don't give it a disk cache, or the client's promise 
 | Parameter | Meaning |
 |---|---|
 | `region` | Required. `Region.Circle(lat, lon, radius)` with the radius in metres, or `Region.Bbox(west, south, east, north)` in degrees, the order of the wire's bbox string. A bbox with `west > east` crosses the antimeridian. |
-| `text` | Optional search text, matched fuzzily against each place's `name` and its `variants[].name` after lowercasing and stripping accents and extra whitespace. Places scoring below 0.6 are dropped. |
 | `dataset` | Required, such as `overturemaps.org` or `openstreetmap.org`. There is no default. An empty string is sent to the server as it is. |
+| `text` | Optional search text, matched fuzzily against each place's `name` and its `variants[].name` after lowercasing and stripping accents and extra whitespace. Places scoring below 0.6 are dropped. |
 | `collection` | Optional, such as `place` or `way`. |
 | `sort` | `SortMode.FUSED` (default), `DISTANCE` or `SIMILARITY`. |
 

@@ -141,6 +141,46 @@ class AttributionScenariosTest {
     @Nested
     @DisplayName("beyond the fixtures")
     inner class BeyondTheFixtures {
+        private fun tile(url: String, origin: String, name: String, collection: String) =
+            """{"url": "https://places.atgeo.org/tiles/$url", "body": {"records": [{"value": {"${'$'}type": "org.atgeo.place", "origin": "$origin", "name": "$name",
+                "locations": [{"${'$'}type": "community.lexicon.location.geo", "latitude": "37.770000", "longitude": "-122.415000"}]}}],
+                "attribution": [{"dataset": "d", "collection": "$collection"}]}}"""
+
+        private fun twoTiles(nameA: String, nameB: String) = Scenario(
+            Json.parseToJsonElement(
+                """{"name": "two tiles", "dataset": "d", "region": {"bbox": [-122.42, 37.76, -122.41, 37.78]},
+                    "tiles": [${tile("a.json", "urn:atgeo:d:c1:1", nameA, "c1")}, ${tile("b.json", "urn:atgeo:d:c2:2", nameB, "c2")}],
+                    "expect": {"attribution": [], "hits": []}}""",
+            ) as JsonObject,
+        )
+
+        @Test
+        fun `gives each hit the collection of its own tile, not of the first tile used`() = runTest {
+            val s = twoTiles("Cafe", "Cafe")
+            val hits = client(s.transport()).searchPlaces(s.region, "d").places
+            assertEquals(
+                setOf("urn:atgeo:d:c1:1" to "c1", "urn:atgeo:d:c2:2" to "c2"),
+                hits.map { it.origin to it.collection?.collection }.toSet(),
+            )
+        }
+
+        @Test
+        fun `keeps each surviving hit with its own tile when ranking drops another record`() = runTest {
+            val s = twoTiles("Zzzzqqq", "Cafe")
+            val hits = client(s.transport()).searchPlaces(s.region, "d", text = "Cafe").places
+            assertEquals(listOf("urn:atgeo:d:c2:2" to CollectionKey("d", "c2")), hits.map { it.origin to it.collection })
+        }
+
+        @Test
+        fun `hands out attribution lists that refuse a cast and a change`() = runTest {
+            val s = twoTiles("Cafe", "Cafe")
+            val result = client(s.transport()).searchPlaces(s.region, "d")
+            @Suppress("UNCHECKED_CAST")
+            val list = result.attribution as MutableList<Any?>
+            org.junit.jupiter.api.Assertions.assertThrows(UnsupportedOperationException::class.java) { list.add("changed") }
+            org.junit.jupiter.api.Assertions.assertThrows(UnsupportedOperationException::class.java) { list.clear() }
+        }
+
         @Test
         fun `sorts by UTF-16 code unit, so a supplementary character sorts before U+FFFD`() = runTest {
             val tile = """{"records": [], "attribution": [

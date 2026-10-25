@@ -2,7 +2,6 @@ package org.atgeo.client
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
-import java.util.ArrayList
 import java.util.Collections
 import java.util.Objects
 
