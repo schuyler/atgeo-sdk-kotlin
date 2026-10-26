@@ -49,7 +49,12 @@ class RankingTest {
                         val r = it as JsonObject
                         record(r.getValue("value") as JsonObject, r["importance"]?.jsonPrimitive?.long)
                     }
-                    val server = FakeServer(tilesets = listOf(overture(listOf(FakeTile("https://places.atgeo.org/tiles/t0.json", records)))))
+                    val url = "https://places.atgeo.org/tiles/t0.json"
+                    val overview = (s["overview"] as? JsonPrimitive)?.content == "true"
+                    val server = FakeServer(
+                        tilesets = listOf(overture(listOf(FakeTile(url, records)))),
+                        tilesFor = if (overview) ({ _ -> TilesAnswer.Listing(listOf(url), overview = true) }) else null,
+                    )
                     val sort = s["sort"].stringOrNull()?.let { SortMode.valueOf(it.uppercase()) } ?: SortMode.FUSED
                     val places = client(server).searchPlaces(
                         regionOf(s.getValue("region") as JsonObject),

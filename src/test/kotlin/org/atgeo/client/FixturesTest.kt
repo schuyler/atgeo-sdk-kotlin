@@ -12,7 +12,8 @@ class FixturesTest {
     fun `shared fixtures parse and have the expected case counts`() {
         assertEquals(41, (fixture("normalize.json") as JsonArray).size)
         assertEquals(33, (fixture("jaro-winkler.json") as JsonArray).size)
-        assertEquals(12, (fixture("ranking-scenarios.json") as JsonArray).size)
+        assertEquals(19, (fixture("ranking-scenarios.json") as JsonArray).size)
+        assertEquals(36, (fixture("match-tiers.json") as JsonArray).size)
         assertEquals(104, (fixture("lenient-readers.json") as JsonArray).size)
         assertEquals(12, (fixture("attribution-scenarios.json") as JsonArray).size)
     }
