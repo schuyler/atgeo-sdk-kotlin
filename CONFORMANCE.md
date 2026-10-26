@@ -1,6 +1,6 @@
 # Conformance notes
 
-This port follows the port contract at atgeo-sdk-js `2710a14ba7d9485ddb6c00975f396e95389ac419` (fixtures and lexicons pinned in the `SOURCE` files under `src/test/resources/fixtures/`, which CI checks byte for byte). Where this port reads input differently from the TypeScript reference, within the freedoms the [port contract](https://github.com/schuyler/atgeo-sdk-js/blob/main/docs/port-contract.md) grants (§5, §14). A compliant server never sends any of these; they matter only for malformed data.
+This port follows the port contract at atgeo-sdk-js `754aa0917d2839b489f0be3be60ac3b7530a52c7` (fixtures and lexicons pinned in the `SOURCE` files under `src/test/resources/fixtures/`, which CI checks byte for byte). Where this port reads input differently from the TypeScript reference, within the freedoms the [port contract](https://github.com/schuyler/atgeo-sdk-js/blob/main/docs/port-contract.md) grants (§5, §14). A compliant server never sends any of these; they matter only for malformed data.
 
 ## Number parsing (contract §5)
 
