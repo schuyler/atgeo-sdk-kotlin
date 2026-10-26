@@ -94,15 +94,40 @@ private fun scoreName(query: String, tokens: List<String>, name: String): Double
     return 0.5 * jaroWinkler(query, name) + 0.5 * (sum / tokens.size)
 }
 
-/** Best score of `query` (already normalized, non-empty) against the place's name and variant names. */
-internal fun textScore(query: String, value: JsonObject): Double {
-    val tokens = query.split(" ").take(MAX_QUERY_TOKENS)
+/** The place's name and variant names, normalized, empty ones dropped. */
+private fun nameList(value: JsonObject): List<String> {
     val variants = (value["variants"] as? JsonArray).orEmpty()
-    val names = (listOf(value["name"]) + variants.map { (it as? JsonObject)?.get("name") })
+    return (listOf(value["name"]) + variants.map { (it as? JsonObject)?.get("name") })
         .mapNotNull { it.stringOrNull() }
         .map(::normalize)
         .filter { it.isNotEmpty() }
+}
+
+/** Best score of `query` (already normalized, non-empty) against the place's name and variant names. */
+internal fun textScore(query: String, value: JsonObject): Double {
+    val tokens = query.split(" ").take(MAX_QUERY_TOKENS)
     var best = 0.0
-    for (n in names) best = max(best, scoreName(query, tokens, n))
+    for (n in nameList(value)) best = max(best, scoreName(query, tokens, n))
     return best
+}
+
+private val APOSTROPHES = Regex("['\u2019\u02BC]")
+private val PUNCTUATION = Regex("\\p{P}+")
+
+// Apostrophes vanish, other punctuation separates words: "mcdonalds" meets "McDonald's", "st louis" meets "St. Louis".
+private fun fold(word: String): List<String> =
+    word.replace(APOSTROPHES, "").replace(PUNCTUATION, " ").split(" ").filter { it.isNotEmpty() }
+
+/**
+ * Tier 1 when every query token starts some token of one single name or variant, else 2 (contract §7).
+ * `query` is already normalized. startsWith compares UTF-16 units, as the reference does.
+ */
+internal fun matchTier(query: String, value: JsonObject): Int {
+    val queryTokens = query.split(" ").take(MAX_QUERY_TOKENS).flatMap(::fold)
+    if (queryTokens.isEmpty()) return 1
+    val exact = nameList(value).any { name ->
+        val nameTokens = fold(name)
+        queryTokens.all { q -> nameTokens.any { it.startsWith(q) } }
+    }
+    return if (exact) 1 else 2
 }

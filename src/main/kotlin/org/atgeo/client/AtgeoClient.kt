@@ -132,7 +132,7 @@ public class AtgeoClient internal constructor(
         val attribution = mergeAttribution(used.map { (_, tile) -> tile.attribution })
         val counts = SearchResult.TileCounts(fetched = used.size, failed = tileFailures.size)
         SearchResult(
-            rank(records, region, query, sort) { r -> collectionOf(r.value, tileOf.getValue(r)) },
+            rank(records, region, query, sort, overview) { r -> collectionOf(r.value, tileOf.getValue(r)) },
             tileFailures.isEmpty(), overview, counts, tileFailures, attribution,
         )
     }

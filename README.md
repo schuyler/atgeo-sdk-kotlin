@@ -25,7 +25,7 @@ for (hit in result.places) {
 }
 ```
 
-`searchPlaces` is a `suspend` function; call it from any coroutine, the main thread included. Misspellings are fine; matching is fuzzy. If `complete` is `false`, some tiles failed to load and the results are partial; `tileFailures` says which and why. If `overview` is `true`, the region was too big to search in full and you got only its most important places. `result.attribution` lists whose data you're showing; credit them.
+`searchPlaces` is a `suspend` function; call it from any coroutine, the main thread included. Misspellings are fine; matching is fuzzy (names whose words start with every query word rank first). If `complete` is `false`, some tiles failed to load and the results are partial; `tileFailures` says which and why. If `overview` is `true`, the region was too big to search in full and you got only its most important places; with `text`, such an answer keeps only the places that match every query word, since the coarse set can't hold the place you meant. `result.attribution` lists whose data you're showing; credit them.
 
 ## Installation
 
@@ -126,7 +126,9 @@ These are plain classes rather than data classes, so that later versions can add
 
 `attribution` is the union of what every tile the search used says about its data, one entry per dataset and collection (the first tile in URL order wins), sorted by dataset then collection. It includes collections the tile only references, so a hit's neighbouring division is credited too, and it counts tiles whose places were all filtered out. `collection` is matched against the tile the hit came from, on `place.origin` alone: a hit identified only by its uri has none. Nothing you do to either, `licenses` included, changes the cache.
 
-`FUSED` orders by similarity, breaking near-ties by importance, then distance. `DISTANCE` orders nearest first, then the smaller place, then importance, then similarity. `SIMILARITY` orders by similarity, then distance, and needs `text`. Scores are compared to three decimals and remaining ties break on `origin`, so the order is deterministic.
+With `text`, places scoring below 0.6 are dropped. The rest rank in two tiers, whatever the sort mode: a place with a name (its own or a variant) that has every word of the query as the start of one of its words (apostrophes ignored, other punctuation splitting words, so `mcdonalds` finds `McDonald's` and `st louis` finds `St. Louis`) comes before one that matches only fuzzily. Within a tier, the sort mode decides.
+
+`FUSED` orders by tier, then by similarity, breaking near-ties by importance, then distance. `DISTANCE` orders by tier, then nearest first, then the smaller place, then importance, then similarity. `SIMILARITY` orders by tier, then similarity, then distance, and needs `text`. Scores are compared to three decimals and remaining ties break on `origin`, so the order is deterministic.
 
 The [JavaScript README](https://github.com/schuyler/atgeo-sdk-js#readme) has the long version: overview answers, places that appear in several tiles, and how ties are broken. All of it applies here unchanged.
 
@@ -182,7 +184,7 @@ ATGEO_SERVER=http://localhost:8000 ./gradlew e2e
 
 The end-to-end check takes the same `ATGEO_SERVER`, `ATGEO_DATASET`, `ATGEO_COLLECTION` and `ATGEO_REGION` variables as the JavaScript one. It can't pass until a server with garganorn#27 is deployed, because `getPlace` answers differently now. It still runs, and it's not skipped.
 
-`src/test/resources/fixtures/` holds the shared fixtures, copied from atgeo-sdk-js at the commit named in `SOURCE` (`./gradlew test` runs `lenient-readers.json` and `attribution-scenarios.json` along with the rest), and the garganorn lexicons, with their own `SOURCE`.
+`src/test/resources/fixtures/` holds the shared fixtures, copied from atgeo-sdk-js at the commit named in `SOURCE` (`./gradlew test` runs `lenient-readers.json`, `attribution-scenarios.json` and `match-tiers.json` along with the rest), and the garganorn lexicons, with their own `SOURCE`.
 
 ## License
 
