@@ -54,6 +54,20 @@ class AutocompleteTest {
         assertFailsWith<IllegalArgumentException> { client.autocompleteByKeyword(OVERTURE_DATASET, region = KeywordRegion(0.0, 10.0, 1.0, 5.0)) }
     }
 
+    // A caller that passes null (Java, reflection) gets different exceptions from the four methods, by the bytecode.
+    // The three suspend methods have no compiler null check, so each checks for itself and throws
+    // IllegalArgumentException. autocompleteByKeyword is not suspend, so the compiler's own parameter check
+    // (Intrinsics.checkNotNullParameter) runs first and throws NullPointerException, naming `dataset`.
+    @Test
+    fun `a null dataset from a Java caller throws NullPointerException naming dataset, before any request`() = runTest {
+        val (fake, client) = setup()
+        val method = AtgeoClient::class.java.methods.single { it.name == "autocompleteByKeyword" }
+        val error = assertFailsWith<java.lang.reflect.InvocationTargetException> { method.invoke(client, null, null, null) }
+        assertTrue(error.targetException is NullPointerException, "${error.targetException}")
+        assertTrue("dataset" in error.targetException.message.orEmpty(), "${error.targetException.message}")
+        assertEquals(emptyList(), fake.requests)
+    }
+
     // A transport whose first request waits to be cancelled; the rest go to the fake.
     private class FirstHangs(private val fake: FakeServer, val started: CompletableDeferred<Unit> = CompletableDeferred()) : HttpTransport {
         private var calls = 0
@@ -135,7 +149,41 @@ class AutocompleteTest {
                 client.autocompleteByKeyword(OVERTURE_DATASET).searchByKeyword("Zan")
             }
             assertFailsWith<CancellationException> { call.await() }
+            testScheduler.advanceUntilIdle()
             assertEquals(0, fake.requests.size)
+        }
+
+        // D1: nothing is requested for a keyword that cannot qualify, so there is nothing for the caller's
+        // cancellation to stop, and the call resolves empty (as for a cached answer, contract §11).
+        @Test
+        fun `a non-qualifying keyword from an already-cancelled caller resolves empty and sends nothing`() = runTest {
+            val (fake, client) = setup()
+            // The caller's own deferred is cancelled, so read the result from inside rather than from await().
+            var result: KeywordSearchResult? = null
+            val call = async {
+                kotlin.coroutines.coroutineContext[kotlinx.coroutines.Job]!!.cancel(CancellationException("caller gave up"))
+                result = client.autocompleteByKeyword(OVERTURE_DATASET).searchByKeyword("z")
+            }
+            call.join()
+            assertEquals(nothing, result)
+            testScheduler.advanceUntilIdle()
+            assertEquals(0, fake.requests.size)
+        }
+
+        @Test
+        fun `a non-qualifying keyword from an already-cancelled caller still supersedes the previous call`() = runTest {
+            val transport = FirstHangs(FakeServer(tilesets = listOf(overture(tiles))))
+            val autocompleter = client(transport).autocompleteByKeyword(OVERTURE_DATASET)
+            val first = async { runCatching { autocompleter.searchByKeyword("Za") }.exceptionOrNull() }
+            transport.started.await()
+            var result: KeywordSearchResult? = null
+            val second = async {
+                kotlin.coroutines.coroutineContext[kotlinx.coroutines.Job]!!.cancel(CancellationException("caller gave up"))
+                result = autocompleter.searchByKeyword("z")
+            }
+            second.join()
+            assertEquals(nothing, result)
+            assertTrue(first.await() is CancellationException)
         }
 
         @Test
