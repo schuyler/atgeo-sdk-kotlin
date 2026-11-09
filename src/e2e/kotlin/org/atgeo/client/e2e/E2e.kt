@@ -50,7 +50,9 @@ public fun main(): Unit = runBlocking {
     check((matched.places[0].score ?: 0.0) > 0) { "top text hit has no score" }
     log("searchNearby (text)", "\"$name\" -> top hit ${nameOf(matched.places[0].place)}, ${matched.places.size} places")
 
-    check(matched.disclosed.keyword.not() && matched.disclosed.region == 0.01) { "searchNearby disclosed ${matched.disclosed}" }
+    // The cold search disclosed the region it fetched; the warm one on the same client was a full cache hit and disclosed none (contract §4.11).
+    check(!nearby.disclosed.keyword && nearby.disclosed.region == 0.01) { "searchNearby disclosed ${nearby.disclosed}" }
+    check(matched.disclosed.region == null) { "warm searchNearby disclosed ${matched.disclosed}" }
 
     // Sends the name to the server: the keyword methods may.
     val keyword = client.searchByKeyword(name, dataset = dataset, collection = collection)

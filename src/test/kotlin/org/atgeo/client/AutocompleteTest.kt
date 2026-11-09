@@ -130,8 +130,10 @@ class AutocompleteTest {
         @Test
         fun `a call from an already-cancelled caller sends nothing`() = runTest {
             val (fake, client) = setup()
-            val call = async(start = kotlinx.coroutines.CoroutineStart.LAZY) { client.autocompleteByKeyword(OVERTURE_DATASET).searchByKeyword("Zan") }
-            call.cancel(CancellationException("caller gave up"))
+            val call = async {
+                kotlin.coroutines.coroutineContext[kotlinx.coroutines.Job]!!.cancel(CancellationException("caller gave up"))
+                client.autocompleteByKeyword(OVERTURE_DATASET).searchByKeyword("Zan")
+            }
             assertFailsWith<CancellationException> { call.await() }
             assertEquals(0, fake.requests.size)
         }

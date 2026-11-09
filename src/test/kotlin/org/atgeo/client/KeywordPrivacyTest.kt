@@ -84,21 +84,35 @@ class KeywordPrivacyTest {
     }
 
     @Test
-    fun `the keyword search and the fallback's keyword half never send for a cancelled caller`() = runTest {
+    fun `the keyword search never sends for a cancelled caller`() = runTest {
         val fake = FakeServer(tilesets = listOf(overture(tiles)))
         val client = client(Deaf(fake))
-        val gate = CompletableDeferred<Unit>()
-        val call = async(start = kotlinx.coroutines.CoroutineStart.LAZY) {
-            gate.await()
-            client.searchByKeyword("Quokka", OVERTURE_DATASET)
+        var outcome: Throwable? = null
+        val call = async {
+            kotlin.coroutines.coroutineContext[kotlinx.coroutines.Job]!!.cancel(CancellationException("caller gave up"))
+            // An exception thrown after the cancel would be lost with the coroutine, so record it.
+            outcome = runCatching { client.searchByKeyword("Quokka", OVERTURE_DATASET) }.exceptionOrNull()
         }
-        call.cancel()
-        assertFailsWith<CancellationException> { call.await() }
-        val fallback = async(start = kotlinx.coroutines.CoroutineStart.LAZY) {
-            client.searchNearbyThenByKeyword(nearbyRegion, OVERTURE_DATASET, "Quokka", KeywordRegionMode.NONE)
-        }
-        fallback.cancel()
-        assertFailsWith<CancellationException> { fallback.await() }
+        call.join()
+        assertTrue(outcome is CancellationException, "$outcome")
         assertEquals(0, fake.requests.size)
+    }
+
+    @Test
+    fun `the fallback's keyword half never sends for a caller that cancelled after the nearby half`() = runTest {
+        val fake = FakeServer(tilesets = listOf(overture(tiles)))
+        val client = client(Deaf(fake))
+        // Warm the cache, so the nearby half needs no request; the keyword half is then the first one made.
+        client.searchNearby(nearbyRegion, dataset = OVERTURE_DATASET)
+        val before = fake.requests.size
+        var outcome: Throwable? = null
+        val call = async {
+            kotlin.coroutines.coroutineContext[kotlinx.coroutines.Job]!!.cancel(CancellationException("caller gave up"))
+            outcome = runCatching { client.searchNearbyThenByKeyword(nearbyRegion, OVERTURE_DATASET, "Quokka", KeywordRegionMode.NONE) }.exceptionOrNull()
+        }
+        call.join()
+        assertTrue(outcome is CancellationException, "$outcome")
+        assertEquals(before, fake.requests.size)
+        assertTrue(fake.requests.none { "searchPlaces" in it })
     }
 }

@@ -185,7 +185,7 @@ fun autocompleteByKeyword(dataset: String, collection: String? = null, region: K
 
 ## Privacy
 
-With the `Nearby` methods, your search text never leaves the device. Neither does your precise location. A method whose name contains `Keyword` may send the keyword, as [Keyword search](#keyword-search) says; no other method does.
+With `searchNearby` (only), your search text never leaves the device. Neither does your precise location. A method whose name contains `Keyword` may send the keyword, as [Keyword search](#keyword-search) says; no other method does.
 
 A search asks the server which tiles cover a bounding box snapped outward to a 0.01° grid (roughly 1 km), downloads those tiles, and does the matching, filtering and ranking locally. The server learns the cell, the dataset and collection, and which tiles you fetched that weren't already cached. It also sees your IP address and the transport's own fixed headers. The default transport sends `User-Agent: atgeo-client-kotlin` rather than the platform's, which on Android names the OS release, the device model and its firmware build; a transport of your own sends whatever its HTTP stack does (OkHttp's is `okhttp/<version>`). The [JavaScript README](https://github.com/schuyler/atgeo-sdk-js#privacy) lists exactly what goes on the wire; it's the same here, and the test suite checks it against a request-capturing fake server.
 
