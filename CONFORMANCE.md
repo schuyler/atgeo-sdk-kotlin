@@ -59,7 +59,12 @@ The number table and the unquoted literal are pinned by tests in `WireTest`, the
 
 ## A null dataset (contract §4.1)
 
-`dataset` is a non-null `String`, which is the contract's "non-optional type": a search without one does not compile. The one way past it is a caller that passes `null` (Java, reflection). The Kotlin compiler emits no null check for the parameters of a `suspend` function, so `searchNearby`, `searchByKeyword`, `searchNearbyThenByKeyword` and `autocompleteByKeyword` check for themselves and throw `IllegalArgumentException` mentioning `dataset`, as their first statement, before the region is validated and before any request. Pinned by `ClientTest` (`DatasetsAndCollections`), which calls the method reflectively.
+`dataset` is a non-null `String`, which is the contract's "non-optional type": a search without one does not compile. The one way past it is a caller that passes `null` (Java, reflection). What that caller gets depends on the method, and was read from the compiled bytecode (`javap -c`):
+
+- `searchNearby`, `searchByKeyword` and `searchNearbyThenByKeyword` are `suspend`, and the Kotlin compiler emits no null check for the parameters of a `suspend` function. They check for themselves and throw `IllegalArgumentException` mentioning `dataset`, as their first statement, before the region is validated and before any request.
+- `autocompleteByKeyword` is not `suspend`, so the compiler's own parameter check (`Intrinsics.checkNotNullParameter`) runs first and throws `NullPointerException` ("Parameter specified as non-null is null: ... parameter dataset"), before the region is validated and before any call. Its own check behind that one is never reached for a null.
+
+Pinned by `ClientTest` (`DatasetsAndCollections`, `searchNearby`, called reflectively) and `AutocompleteTest` (`autocompleteByKeyword`, `NullPointerException`).
 
 ## Attribution (contract §4.10, §9)
 

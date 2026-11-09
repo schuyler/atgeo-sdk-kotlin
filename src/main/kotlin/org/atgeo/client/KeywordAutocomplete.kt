@@ -23,7 +23,7 @@ public class KeywordAutocomplete internal constructor(
      * Supersedes this autocompleter's previous call, then searches for `keyword`.
      *
      * **Every keyword that qualifies (contract §17) is sent to the server as given, prefixes included.** The
-     * server keeps no log of it (garganorn's privacy design); an operator who chose to could record what it
+     * server keeps no log of it (garganorn's privacy design), a hostile operator can record what it
      * receives. Debouncing reduces how many prefixes go out, and is the app's choice: this does not debounce.
      * A keyword the server would refuse as too short resolves an empty result without a request.
      * If the server refuses a keyword that qualified with `KeywordRequired`, the call also resolves empty, with
