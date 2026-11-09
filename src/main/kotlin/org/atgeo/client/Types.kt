@@ -5,16 +5,39 @@ import kotlinx.serialization.json.JsonObject
 import java.util.Collections
 import java.util.Objects
 
-/** How [AtgeoClient.searchPlaces] orders its results (contract §8). */
+/** How [AtgeoClient.searchNearby] orders its results (contract §8). */
 public enum class SortMode { FUSED, DISTANCE, SIMILARITY }
+
+/**
+ * A bounding box in degrees for the keyword search: a box only, never a circle, because a circle
+ * invites the device's own position as its centre (contract §16). Sent snapped outward to whole degrees.
+ * `west > east` crosses the antimeridian. Validated by the method that takes it, not on construction.
+ */
+public data class KeywordRegion(val west: Double, val south: Double, val east: Double, val north: Double)
+
+/** Whether [AtgeoClient.searchNearbyThenByKeyword]'s keyword request carries the nearby region, snapped to whole degrees. */
+public enum class KeywordRegionMode { NONE, DEGREE }
+
+/** Where a hit came from: a tile the client searched locally, or the server's keyword search. */
+public enum class Via { TILES, KEYWORD }
+
+/**
+ * What the server learned during one call (contract §4.11): [keyword] is whether the keyword was sent;
+ * [region] the grid, in degrees, of the finest region sent (0.01 or 1.0), or null if none was.
+ */
+public class Disclosure internal constructor(public val keyword: Boolean, public val region: Double?) {
+    override fun equals(other: Any?): Boolean = other is Disclosure && keyword == other.keyword && region == other.region
+    override fun hashCode(): Int = Objects.hash(keyword, region)
+    override fun toString(): String = "Disclosure(keyword=$keyword, region=$region)"
+}
 
 // The result and describe types are plain classes with internal constructors, not data classes, so
 // that a field can be added without breaking apps compiled against an earlier version: a data class's
 // constructor, copy() and componentN() all change shape when a field is added. equals, hashCode and
 // toString behave as a data class's would.
 
-public class SearchResult internal constructor(
-    public val places: List<SearchHit>,
+public class NearbySearchResult internal constructor(
+    public val places: List<NearbyHit>,
     /** False if any tile failed to load, so the results are partial; [tileFailures] says which and why. */
     public val complete: Boolean,
     /** True if the server answered with only the region's most important places. */
@@ -27,6 +50,8 @@ public class SearchResult internal constructor(
      * sorted by dataset then collection (contract §4.10). Always a list; read-only.
      */
     public val attribution: List<Attribution>,
+    /** What the server learned during this call: never the text, and the 0.01 degree grid unless every tile came from the cache. */
+    public val disclosed: Disclosure,
 ) {
     public class TileCounts internal constructor(public val fetched: Int, public val failed: Int) {
         override fun equals(other: Any?): Boolean = other is TileCounts && fetched == other.fetched && failed == other.failed
@@ -34,12 +59,12 @@ public class SearchResult internal constructor(
         override fun toString(): String = "TileCounts(fetched=$fetched, failed=$failed)"
     }
 
-    override fun equals(other: Any?): Boolean = other is SearchResult && places == other.places &&
+    override fun equals(other: Any?): Boolean = other is NearbySearchResult && places == other.places &&
         complete == other.complete && overview == other.overview && tiles == other.tiles && tileFailures == other.tileFailures &&
-        attribution == other.attribution
-    override fun hashCode(): Int = Objects.hash(places, complete, overview, tiles, tileFailures, attribution)
-    override fun toString(): String = "SearchResult(places=$places, complete=$complete, overview=$overview, tiles=$tiles, " +
-        "tileFailures=$tileFailures, attribution=$attribution)"
+        attribution == other.attribution && disclosed == other.disclosed
+    override fun hashCode(): Int = Objects.hash(places, complete, overview, tiles, tileFailures, attribution, disclosed)
+    override fun toString(): String = "NearbySearchResult(places=$places, complete=$complete, overview=$overview, tiles=$tiles, " +
+        "tileFailures=$tileFailures, attribution=$attribution, disclosed=$disclosed)"
 }
 
 /**
@@ -113,32 +138,103 @@ public class Attribution internal constructor(
         "source=$source, licenses=$licenses, attribution=$attribution)"
 }
 
-public class SearchHit internal constructor(
-    public val origin: String?,
+/** What every hit has, whichever search found it. Narrow by [via] or `is`. */
+public sealed interface PlaceHit {
+    public val via: Via
+
+    /** The place's key (contract §4.6), or null for a record that has neither an origin nor a uri. */
+    public val origin: String?
+
     /**
-     * The collection the hit belongs to, matched against its tile's attribution (contract §8); null when
-     * none matches, including a hit identified by its uri.
+     * The collection the hit belongs to, matched against the attribution of its tile (a nearby hit) or of the
+     * place (a keyword hit) (contract §8); null when none matches, including a hit identified by its uri.
      */
-    public val collection: CollectionKey?,
+    public val collection: CollectionKey?
+
     /** The place exactly as served. */
-    public val place: JsonObject,
-    public val importance: Long?,
+    public val place: JsonObject
+    public val importance: Long?
+
+    /** `place.name` if it is a string. */
+    public val name: String?
+
+    /** The place's point and box, as the client reads them. */
+    public val location: PlaceLocation
+}
+
+/** A hit from the nearby search: found in tiles, so it has a distance and, with text, a score. */
+public class NearbyHit internal constructor(
+    override val origin: String?,
+    override val collection: CollectionKey?,
+    override val place: JsonObject,
+    override val importance: Long?,
     /** Metres from the region's centre to the nearest point of the place. */
     public val distance: Double,
     /** 0 to 1; null when the search had no text. */
     public val score: Double?,
-) {
-    /** `place.name` if it is a string. */
-    public val name: String? get() = place["name"].stringOrNull()
+) : PlaceHit {
+    override val via: Via get() = Via.TILES
+    override val name: String? get() = place["name"].stringOrNull()
+    override val location: PlaceLocation get() = placeLocation(place)
 
-    /** The place's point and box, as the client read them to compute [distance]. */
-    public val location: PlaceLocation get() = placeLocation(place)
-
-    override fun equals(other: Any?): Boolean = other is SearchHit && origin == other.origin && collection == other.collection &&
+    override fun equals(other: Any?): Boolean = other is NearbyHit && origin == other.origin && collection == other.collection &&
         place == other.place && importance == other.importance && distance == other.distance && score == other.score
     override fun hashCode(): Int = Objects.hash(origin, collection, place, importance, distance, score)
-    override fun toString(): String = "SearchHit(origin=$origin, collection=$collection, place=$place, " +
+    override fun toString(): String = "NearbyHit(origin=$origin, collection=$collection, place=$place, " +
         "importance=$importance, distance=$distance, score=$score)"
+}
+
+/** A hit from the keyword search. It has no distance or score: the server ranks by neither, and [location] gives an app what it needs for a distance. */
+public class KeywordHit internal constructor(
+    override val origin: String?,
+    override val collection: CollectionKey?,
+    override val place: JsonObject,
+    override val importance: Long?,
+) : PlaceHit {
+    override val via: Via get() = Via.KEYWORD
+    override val name: String? get() = place["name"].stringOrNull()
+    override val location: PlaceLocation get() = placeLocation(place)
+
+    override fun equals(other: Any?): Boolean = other is KeywordHit && origin == other.origin && collection == other.collection &&
+        place == other.place && importance == other.importance
+    override fun hashCode(): Int = Objects.hash(origin, collection, place, importance)
+    override fun toString(): String = "KeywordHit(origin=$origin, collection=$collection, place=$place, importance=$importance)"
+}
+
+public class KeywordSearchResult internal constructor(
+    /** The server's matches in the server's order, each place once. */
+    public val places: List<KeywordHit>,
+    /** The union of the attribution of every place, as in [NearbySearchResult.attribution]. Always a list; read-only. */
+    public val attribution: List<Attribution>,
+    public val disclosed: Disclosure,
+) {
+    override fun equals(other: Any?): Boolean = other is KeywordSearchResult && places == other.places &&
+        attribution == other.attribution && disclosed == other.disclosed
+    override fun hashCode(): Int = Objects.hash(places, attribution, disclosed)
+    override fun toString(): String = "KeywordSearchResult(places=$places, attribution=$attribution, disclosed=$disclosed)"
+}
+
+/**
+ * The nearby result's fields, with [places] holding both kinds of hit: keyword hits first, then the nearby hits
+ * the keyword hits did not repeat (contract §18). Narrow a hit by [PlaceHit.via] or `is`.
+ */
+public class FallbackSearchResult internal constructor(
+    public val places: List<PlaceHit>,
+    public val complete: Boolean,
+    public val overview: Boolean,
+    public val tiles: NearbySearchResult.TileCounts,
+    public val tileFailures: List<TileFailure>,
+    /** The union of the nearby and keyword attribution; the nearby entry wins a tie. */
+    public val attribution: List<Attribution>,
+    /** `keyword` is true when the keyword was sent, though the answer may have been refused or may have added no hit. */
+    public val disclosed: Disclosure,
+) {
+    override fun equals(other: Any?): Boolean = other is FallbackSearchResult && places == other.places &&
+        complete == other.complete && overview == other.overview && tiles == other.tiles && tileFailures == other.tileFailures &&
+        attribution == other.attribution && disclosed == other.disclosed
+    override fun hashCode(): Int = Objects.hash(places, complete, overview, tiles, tileFailures, attribution, disclosed)
+    override fun toString(): String = "FallbackSearchResult(places=$places, complete=$complete, overview=$overview, tiles=$tiles, " +
+        "tileFailures=$tileFailures, attribution=$attribution, disclosed=$disclosed)"
 }
 
 public class PlaceRecord internal constructor(

@@ -35,20 +35,28 @@ public fun main(): Unit = runBlocking {
     check(tileset.collections.any { wanted(it.dataset, it.collection) }) { "describeTileset does not list the dataset and collection" }
     log("describeTileset", "${tileset.slug}, ${tileset.collections.size} collection(s)")
 
-    val nearby = client.searchPlaces(region, dataset = dataset, collection = collection, sort = SortMode.DISTANCE)
+    val nearby = client.searchNearby(region, dataset = dataset, collection = collection, sort = SortMode.DISTANCE)
     check(nearby.complete) { "${nearby.tiles.failed} tile(s) failed: ${nearby.tileFailures}" }
     check(nearby.places.isNotEmpty()) { "no places in region" }
     val distances = nearby.places.map { it.distance }
     check(distances.withIndex().all { (i, d) -> d <= radius && (i == 0 || d >= distances[i - 1]) }) { "not distance-ordered within radius" }
-    log("searchPlaces (no text)", "${nearby.places.size} places from ${nearby.tiles.fetched} tile(s)")
+    log("searchNearby (no text)", "${nearby.places.size} places from ${nearby.tiles.fetched} tile(s)")
 
     val named = nearby.places.firstOrNull { it.origin != null && !nameOf(it.place).isNullOrEmpty() }
     checkNotNull(named) { "no named place in region" }
     val name = nameOf(named.place)!!
-    val matched = client.searchPlaces(region, text = name, dataset = dataset, collection = collection)
+    val matched = client.searchNearby(region, text = name, dataset = dataset, collection = collection)
     check(matched.places.any { it.origin == named.origin && it.score != null }) { "named place missing from text search" }
     check((matched.places[0].score ?: 0.0) > 0) { "top text hit has no score" }
-    log("searchPlaces (text)", "\"$name\" -> top hit ${nameOf(matched.places[0].place)}, ${matched.places.size} places")
+    log("searchNearby (text)", "\"$name\" -> top hit ${nameOf(matched.places[0].place)}, ${matched.places.size} places")
+
+    check(matched.disclosed.keyword.not() && matched.disclosed.region == 0.01) { "searchNearby disclosed ${matched.disclosed}" }
+
+    // Sends the name to the server: the keyword methods may.
+    val keyword = client.searchByKeyword(name, dataset = dataset, collection = collection)
+    check(keyword.disclosed.keyword && keyword.disclosed.region == null) { "searchByKeyword disclosed ${keyword.disclosed}" }
+    check(keyword.places.any { it.origin == named.origin }) { "named place missing from keyword search" }
+    log("searchByKeyword", "\"$name\" -> ${keyword.places.size} places")
 
     val origin = named.origin!!
     val record = AtgeoClient(server = server).getPlace(origin)

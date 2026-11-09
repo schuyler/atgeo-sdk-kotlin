@@ -22,7 +22,7 @@ private val near = Region.Circle(0.0, 0.0, 10.0)
 private fun tileRecord(origin: String?, name: String = "Same", importance: Long? = null, locations: List<JsonObject> = listOf(here)) =
     TileRecord(place("x", name, locations, mapOf("origin" to origin?.let(::JsonPrimitive))), importance = importance)
 
-private fun nameOf(hit: SearchHit) = (hit.place["name"] as JsonPrimitive).content
+private fun nameOf(hit: NearbyHit) = (hit.place["name"] as JsonPrimitive).content
 
 // The fixture's region is {lat, lon, radius} or {bbox: [west, south, east, north]}.
 internal fun regionOf(o: JsonObject): Region {
@@ -56,7 +56,7 @@ class RankingTest {
                         tilesFor = if (overview) ({ _ -> TilesAnswer.Listing(listOf(url), overview = true) }) else null,
                     )
                     val sort = s["sort"].stringOrNull()?.let { SortMode.valueOf(it.uppercase()) } ?: SortMode.FUSED
-                    val places = client(server).searchPlaces(
+                    val places = client(server).searchNearby(
                         regionOf(s.getValue("region") as JsonObject),
                         s.getValue("dataset").stringOrNull()!!,
                         text = s["text"].stringOrNull(),

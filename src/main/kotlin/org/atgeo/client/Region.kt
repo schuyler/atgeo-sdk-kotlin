@@ -12,7 +12,7 @@ import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
 
-/** Where to search. Neither class validates on construction; [AtgeoClient.searchPlaces] does (contract §3). */
+/** Where to search. Neither class validates on construction; [AtgeoClient.searchNearby] does (contract §3). */
 public sealed interface Region {
     /** A circle; `radius` in metres. */
     public data class Circle(val lat: Double, val lon: Double, val radius: Double) : Region
@@ -30,15 +30,20 @@ internal data class LonSegment(val lo: Double, val hi: Double)
 
 internal data class LatLon(val lat: Double, val lon: Double)
 
+private fun inRange(n: Double, limit: Double) = n.isFinite() && abs(n) <= limit
+
+private fun requireValidBbox(west: Double, south: Double, east: Double, north: Double) = require(
+    inRange(west, 180.0) && inRange(east, 180.0) && inRange(south, 90.0) && inRange(north, 90.0) && south <= north,
+) { "invalid bbox" }
+
+/** Throws IllegalArgumentException for a keyword region contract §3 rejects: the bbox checks. */
+internal fun validateKeywordRegion(region: KeywordRegion) = requireValidBbox(region.west, region.south, region.east, region.north)
+
 /** Throws IllegalArgumentException for a region contract §3 rejects. */
 internal fun validateRegion(region: Region) {
-    fun ok(n: Double, limit: Double) = n.isFinite() && abs(n) <= limit
+    fun ok(n: Double, limit: Double) = inRange(n, limit)
     when (region) {
-        is Region.Bbox -> require(
-            ok(region.west, 180.0) && ok(region.east, 180.0) &&
-                ok(region.south, 90.0) && ok(region.north, 90.0) &&
-                region.south <= region.north,
-        ) { "invalid bbox" }
+        is Region.Bbox -> requireValidBbox(region.west, region.south, region.east, region.north)
         is Region.Circle -> require(
             ok(region.lat, 90.0) && ok(region.lon, 180.0) && region.radius.isFinite() && region.radius >= 0,
         ) { "invalid circle" }
@@ -79,7 +84,7 @@ internal fun lonSegmentsOverlap(a: List<LonSegment>, b: List<LonSegment>): Boole
     a.any { x -> b.any { y -> x.lo <= y.hi && y.lo <= x.hi } }
 
 // The circle's enclosing box as [minLon, minLat, maxLon, maxLat]; minLon > maxLon when it wraps.
-private fun circleBox(lat: Double, lon: Double, radius: Double): DoubleArray {
+internal fun circleBox(lat: Double, lon: Double, radius: Double): DoubleArray {
     val half = radius / DEG_TO_M
     val minLat = max(lat - half, -90.0)
     val maxLat = min(lat + half, 90.0)
@@ -129,4 +134,35 @@ internal fun queryBboxes(region: Region): List<String> {
         val (lon0, lon1) = snapSpan(segment.lo, segment.hi, 180)
         listOf(lon0, lat0, lon1, lat1).joinToString(",") { fixed(it) }
     }
+}
+
+// A whole-degree span in integers, so no -0 and no ".0" can reach the string. A point or a line widens by one cell.
+private fun wholeSpan(lo: Double, hi: Double, limit: Long): Pair<Long, Long> {
+    var start = floor(lo).toLong()
+    var end = ceil(hi).toLong()
+    if (start == end) {
+        if (end < limit) end++ else start--
+    }
+    return start to end
+}
+
+/**
+ * The `bbox` string of a keyword search: the smallest whole-degree box the server accepts that covers the
+ * input, as `west,south,east,north` integers (contract §16). It is always one box, never split at the antimeridian;
+ * a crossing box whose snapped edges no longer cross validly becomes the full band.
+ */
+internal fun keywordBbox(west: Double, south: Double, east: Double, north: Double): String {
+    val (s, n) = wholeSpan(south, north, 90)
+    // The seams are decided on the input values first: a west of 180 is the meridian at -180, an east of -180 is 180.
+    var w = west
+    var e = east
+    if (w == 180.0 && w > e) w = -180.0
+    if (e == -180.0 && w > e) e = 180.0
+    if (w > e) {
+        val snappedWest = floor(w).toLong()
+        val snappedEast = ceil(e).toLong()
+        return if (snappedWest > 0 && snappedEast < 0) "$snappedWest,$s,$snappedEast,$n" else "-180,$s,180,$n"
+    }
+    val (lo, hi) = wholeSpan(w, e, 180)
+    return "$lo,$s,$hi,$n"
 }

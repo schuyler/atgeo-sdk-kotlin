@@ -17,7 +17,7 @@ import org.junit.jupiter.api.TestFactory
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-// fixtures/attribution-scenarios.json: SearchResult.attribution and SearchHit.collection (contract
+// fixtures/attribution-scenarios.json: NearbySearchResult.attribution and NearbyHit.collection (contract
 // sections 4.10 and 8, runner rules in 13). The tile bodies need not validate against the lexicons, so the
 // server here is raw, not the validating fake.
 
@@ -64,15 +64,15 @@ private fun Attribution.json() = JsonObject(
 )
 
 
-private suspend fun TestScope.searchOf(s: Scenario, transport: HttpTransport): SearchResult =
-    client(transport).searchPlaces(s.region, s.dataset, collection = s.collection)
+private suspend fun TestScope.searchOf(s: Scenario, transport: HttpTransport): NearbySearchResult =
+    client(transport).searchNearby(s.region, s.dataset, collection = s.collection)
 
 // A hit as one comparable string; a null collection is "null", never a missing key (a Kotlin property is always there).
 private fun key(origin: String?, collection: Pair<String, String>?) =
     "${origin?.length}:$origin|${collection?.let { (d, c) -> "${d.length}:$d$c" }}"
 
 /** The hits as a multiset of (origin, collection) pairs, order-insensitive. */
-private fun gotHits(result: SearchResult) = result.places.map { key(it.origin, it.collection?.let { c -> c.dataset to c.collection }) }.sorted()
+private fun gotHits(result: NearbySearchResult) = result.places.map { key(it.origin, it.collection?.let { c -> c.dataset to c.collection }) }.sorted()
 
 private fun Scenario.wantHits() = expectedHits.map { hit ->
     val c = hit["collection"] as? JsonObject
@@ -157,7 +157,7 @@ class AttributionScenariosTest {
         @Test
         fun `gives each hit the collection of its own tile, not of the first tile used`() = runTest {
             val s = twoTiles("Cafe", "Cafe")
-            val hits = client(s.transport()).searchPlaces(s.region, "d").places
+            val hits = client(s.transport()).searchNearby(s.region, "d").places
             assertEquals(
                 setOf("urn:atgeo:d:c1:1" to "c1", "urn:atgeo:d:c2:2" to "c2"),
                 hits.map { it.origin to it.collection?.collection }.toSet(),
@@ -167,14 +167,14 @@ class AttributionScenariosTest {
         @Test
         fun `keeps each surviving hit with its own tile when ranking drops another record`() = runTest {
             val s = twoTiles("Zzzzqqq", "Cafe")
-            val hits = client(s.transport()).searchPlaces(s.region, "d", text = "Cafe").places
+            val hits = client(s.transport()).searchNearby(s.region, "d", text = "Cafe").places
             assertEquals(listOf("urn:atgeo:d:c2:2" to CollectionKey("d", "c2")), hits.map { it.origin to it.collection })
         }
 
         @Test
         fun `hands out attribution lists that refuse a cast and a change`() = runTest {
             val s = twoTiles("Cafe", "Cafe")
-            val result = client(s.transport()).searchPlaces(s.region, "d")
+            val result = client(s.transport()).searchNearby(s.region, "d")
             @Suppress("UNCHECKED_CAST")
             val list = result.attribution as MutableList<Any?>
             org.junit.jupiter.api.Assertions.assertThrows(UnsupportedOperationException::class.java) { list.add("changed") }

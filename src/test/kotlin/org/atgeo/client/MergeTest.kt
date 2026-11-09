@@ -23,7 +23,7 @@ private val noOrigin: Map<String, JsonElement?> = mapOf("origin" to null)
 
 private suspend fun TestScope.search(records: List<JsonObject>, region: Region): List<String> {
     val server = FakeServer(tilesets = listOf(overture(listOf(FakeTile(tileUrl("t"), records.map { record(it) })))))
-    return client(server).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION).places.map { idOf(it.origin) }.sorted()
+    return client(server).searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION).places.map { idOf(it.origin) }.sorted()
 }
 
 private val DIVISION = collectionOf("overturemaps.org", "division")
@@ -33,7 +33,7 @@ private fun divisions(tiles: List<FakeTile>) = FakeTileset("overture-division", 
 private fun division(id: String, name: String, lat: Double = 37.775) =
     place(id, name, listOf(point(lat, -122.415)), mapOf("origin" to JsonPrimitive("urn:atgeo:overturemaps.org:division:$id")))
 
-private fun nameOf(hit: SearchHit) = hit.name
+private fun nameOf(hit: NearbyHit) = hit.name
 
 class MergeTest {
     @Nested
@@ -55,7 +55,7 @@ class MergeTest {
                     ),
                 ),
             )
-            val result = client(server).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            val result = client(server).searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(listOf("a-only", "b-only", "dup"), result.places.map { idOf(it.origin) }.sorted())
         }
 
@@ -64,7 +64,7 @@ class MergeTest {
             val server = FakeServer(
                 tilesets = listOf(overture(listOf(FakeTile(tileUrl("a"), listOf(record(first))), FakeTile(tileUrl("b"), listOf(record(second)))))),
             )
-            assertEquals(listOf("First copy"), client(server).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION).places.map(::nameOf))
+            assertEquals(listOf("First copy"), client(server).searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION).places.map(::nameOf))
         }
 
         @Test
@@ -79,7 +79,7 @@ class MergeTest {
                     ),
                 ),
             )
-            val result = client(server).searchPlaces(region, dataset = "overturemaps.org", collection = "division")
+            val result = client(server).searchNearby(region, dataset = "overturemaps.org", collection = "division")
             assertEquals(1, result.places.size)
             assertEquals("urn:atgeo:overturemaps.org:division:d1", result.places[0].origin)
         }
@@ -102,7 +102,7 @@ class MergeTest {
                         ),
                         tilesFor = { bbox -> TilesAnswer.Urls(listOf(if (bbox.startsWith("170")) tileUrl(eastName) else tileUrl(westName))) },
                     )
-                    assertEquals(listOf(winner), client(server).searchPlaces(Region.Bbox(170.0, 10.0, -170.0, 20.0), OVERTURE_DATASET, collection = OVERTURE_COLLECTION).places.map(::nameOf))
+                    assertEquals(listOf(winner), client(server).searchNearby(Region.Bbox(170.0, 10.0, -170.0, 20.0), OVERTURE_DATASET, collection = OVERTURE_COLLECTION).places.map(::nameOf))
                 }
             }
         }
@@ -111,7 +111,7 @@ class MergeTest {
         fun `keeps two records that have neither origin nor uri`() = runTest {
             fun anonymous(name: String) = place("x", name, listOf(point(37.775, -122.415)), noOrigin)
             val server = FakeServer(tilesets = listOf(overture(listOf(FakeTile(tileUrl("a"), listOf(record(anonymous("One")), record(anonymous("Two"))))))))
-            val result = client(server).searchPlaces(region, dataset = "overturemaps.org")
+            val result = client(server).searchNearby(region, dataset = "overturemaps.org")
             assertEquals(listOf("One", "Two"), result.places.map { nameOf(it)!! }.sorted())
             assertTrue(result.places.all { it.origin == null })
         }
@@ -120,7 +120,7 @@ class MergeTest {
         fun `identifies an origin-less record by its uri`() = runTest {
             val value = place("x", "By uri", listOf(point(37.775, -122.415)), noOrigin)
             val server = FakeServer(tilesets = listOf(overture(listOf(FakeTile(tileUrl("a"), listOf(record(value, uri = "https://example.org/r/1")))))))
-            assertEquals(listOf("https://example.org/r/1"), client(server).searchPlaces(region, dataset = "overturemaps.org").places.map { it.origin })
+            assertEquals(listOf("https://example.org/r/1"), client(server).searchNearby(region, dataset = "overturemaps.org").places.map { it.origin })
         }
     }
 
@@ -131,7 +131,7 @@ class MergeTest {
         fun `orders records equal on score, importance and distance by origin, null last`() = runTest {
             fun same(id: String, extra: Map<String, JsonElement?> = emptyMap()) = record(place(id, "Same", listOf(point(37.775, -122.415)), extra), 5)
             val server = FakeServer(tilesets = listOf(overture(listOf(FakeTile(tileUrl("a"), listOf(same("x", noOrigin), same("c"), same("a"), same("b")))))))
-            val result = client(server).searchPlaces(Region.Bbox(-122.42, 37.77, -122.41, 37.78), dataset = "overturemaps.org")
+            val result = client(server).searchNearby(Region.Bbox(-122.42, 37.77, -122.41, 37.78), dataset = "overturemaps.org")
             assertEquals(listOf(placeOrigin("a"), placeOrigin("b"), placeOrigin("c"), null), result.places.map { it.origin })
         }
     }
@@ -268,7 +268,7 @@ class MergeTest {
             val box = place("clipping", "Clipping", listOf(bboxLocation(89.0, 80.0, 50.0, 40.0)))
             assertTrue(haversine(lat, 0.0, lat, 40.0) > radius)
             val server = FakeServer(tilesets = listOf(overture(listOf(FakeTile(tileUrl("t"), listOf(record(box)))))))
-            val places = client(server).searchPlaces(Region.Circle(lat, 0.0, radius), OVERTURE_DATASET, collection = OVERTURE_COLLECTION).places
+            val places = client(server).searchNearby(Region.Circle(lat, 0.0, radius), OVERTURE_DATASET, collection = OVERTURE_COLLECTION).places
             assertEquals(listOf("clipping"), places.map { idOf(it.origin) })
             assertTrue(places[0].distance <= radius)
         }
@@ -310,31 +310,31 @@ class MergeTest {
             FakeTile(
                 tileUrl("a"),
                 listOf(
-                    record(place("dup", "Copy A", listOf(point(37.775, -122.415))), 5),
+                    record(place("dup", "Alpha Copy A", listOf(point(37.775, -122.415))), 5),
                     record(place("a1", "Alpha", listOf(point(37.772, -122.412))), 5),
                     record(place("a2", "Alpha", listOf(point(37.772, -122.412))), 5),
                 ),
             ),
             FakeTile(
                 tileUrl("b"),
-                listOf(record(place("dup", "Copy B", listOf(point(37.775, -122.415))), 5), record(place("b1", "Alpha", listOf(point(37.772, -122.412))), 5)),
+                listOf(record(place("dup", "Alpha Copy B", listOf(point(37.775, -122.415))), 5), record(place("b1", "Alpha", listOf(point(37.772, -122.412))), 5)),
             ),
             FakeTile(
                 tileUrl("c"),
-                listOf(record(place("dup", "Copy C", listOf(point(37.775, -122.415))), 5), record(place("c1", "Alpha", listOf(point(37.772, -122.412))), 5)),
+                listOf(record(place("dup", "Alpha Copy C", listOf(point(37.775, -122.415))), 5), record(place("c1", "Alpha", listOf(point(37.772, -122.412))), 5)),
             ),
         )
         private val region = Region.Bbox(-122.42, 37.77, -122.41, 37.78)
 
         // Staggered virtual-time delays make the tiles arrive in the given order.
-        private suspend fun TestScope.run(arrival: List<String>, text: String?): SearchResult {
+        private suspend fun TestScope.run(arrival: List<String>, text: String?): NearbySearchResult {
             val server = FakeServer(tilesets = listOf(overture(tiles)))
             val delayed = HttpTransport { url ->
                 val rank = arrival.indexOfFirst { url == tileUrl(it) }
                 if (rank >= 0) delay(rank * 15L)
                 server.get(url)
             }
-            return client(delayed).searchPlaces(region, OVERTURE_DATASET, text = text, collection = OVERTURE_COLLECTION)
+            return client(delayed).searchNearby(region, OVERTURE_DATASET, text = text, collection = OVERTURE_COLLECTION)
         }
 
         @TestFactory
@@ -345,7 +345,7 @@ class MergeTest {
                     assertEquals(1, outputs.toSet().size)
                     val places = outputs[0].places
                     assertEquals(listOf("a1", "a2", "b1", "c1", "dup"), places.map { idOf(it.origin) }.sorted())
-                    assertEquals("Copy A", places.first { idOf(it.origin) == "dup" }.place["name"].stringOrNull())
+                    assertEquals("Alpha Copy A", places.first { idOf(it.origin) == "dup" }.place["name"].stringOrNull())
                 }
             }
         }

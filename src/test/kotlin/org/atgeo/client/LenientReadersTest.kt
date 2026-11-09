@@ -2,6 +2,7 @@ package org.atgeo.client
 
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.boolean
@@ -56,6 +57,13 @@ private val readers: Map<String, (JsonElement) -> JsonElement> = mapOf(
     "getPlace" to { body ->
         readPlace(body).let { obj("value" to it.value, "importance" to num(it.importance), "attribution" to list(it.attribution) { a -> a.json() }) }
     },
+    "searchPlaces" to { body ->
+        obj(
+            "places" to list(readSearchPlaces(body)) { p ->
+                obj("origin" to (p.origin?.let(::JsonPrimitive) ?: JsonNull), "value" to p.value, "importance" to num(p.importance), "attribution" to list(p.attribution) { a -> a.json() })
+            },
+        )
+    },
     "describeService" to { body ->
         readServiceDescription(body).let {
             obj(
@@ -81,8 +89,8 @@ class LenientReadersTest {
     private val cases = (fixture("lenient-readers.json") as JsonArray).map { it as JsonObject }
 
     @Test
-    fun `has the 104 cases the contract describes, and one for every reader`() {
-        assertEquals(104, cases.size)
+    fun `has the 124 cases the contract describes, and one for every reader`() {
+        assertEquals(124, cases.size)
         assertEquals(readers.keys, cases.map { it.getValue("reader").stringOrNull() }.toSet())
     }
 

@@ -79,7 +79,7 @@ class ClientTest {
             val fake = fake()
             val network = client(fake).getPlace(origin)
             val fresh = client(fake)
-            fresh.searchPlaces(Region.Bbox(-122.40, 37.79, -122.39, 37.80), OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            fresh.searchNearby(Region.Bbox(-122.40, 37.79, -122.39, 37.80), OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             val before = fake.requests.size
             assertEquals(network, fresh.getPlace(origin))
             assertEquals(before, fake.requests.size)
@@ -89,7 +89,7 @@ class ClientTest {
         fun `makes no request for the origin of a hit from an earlier search`() = runTest {
             val fake = fake()
             val client = client(fake)
-            val places = client.searchPlaces(Region.Bbox(-122.40, 37.79, -122.39, 37.80), OVERTURE_DATASET, collection = OVERTURE_COLLECTION).places
+            val places = client.searchNearby(Region.Bbox(-122.40, 37.79, -122.39, 37.80), OVERTURE_DATASET, collection = OVERTURE_COLLECTION).places
             val before = fake.requests.size
             client.getPlace(places[0].origin!!)
             assertEquals(before, fake.requests.size)
@@ -100,7 +100,7 @@ class ClientTest {
             val uriOnly = place("u", "By uri", listOf(point(37.775, -122.415)), noOrigin)
             val fake = FakeServer(tilesets = listOf(overture(listOf(FakeTile(tileUrl("a"), listOf(record(uriOnly, 4, "https://example.org/r/u")))))))
             val client = client(fake)
-            val places = client.searchPlaces(region, dataset = "overturemaps.org").places
+            val places = client.searchNearby(region, dataset = "overturemaps.org").places
             assertEquals("https://example.org/r/u", places[0].origin)
             fake.goOffline()
             assertEquals(PlaceRecord("https://example.org/r/u", uriOnly, 4, listOf(OVERTURE_PLACE)), client.getPlace(places[0].origin!!))
@@ -140,7 +140,7 @@ class ClientTest {
         fun `returns the tile's attribution from the cache in served order, duplicates included, unsorted`() = runTest {
             val fake = withReferences()
             val client = client(fake)
-            client.searchPlaces(Region.Bbox(-122.40, 37.79, -122.39, 37.80), OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            client.searchNearby(Region.Bbox(-122.40, 37.79, -122.39, 37.80), OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             fake.goOffline()
             assertEquals(served, client.getPlace(origin).attribution)
         }
@@ -158,7 +158,7 @@ class ClientTest {
             val fake = withReferences()
             val network = client(fake).getPlace(origin)
             val fresh = client(fake)
-            fresh.searchPlaces(Region.Bbox(-122.40, 37.79, -122.39, 37.80), OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            fresh.searchNearby(Region.Bbox(-122.40, 37.79, -122.39, 37.80), OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(network, fresh.getPlace(origin))
         }
 
@@ -167,7 +167,7 @@ class ClientTest {
             val fake = withReferences()
             val client = client(fake)
             val search = Region.Bbox(-122.40, 37.79, -122.39, 37.80)
-            val first = client.searchPlaces(search, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            val first = client.searchNearby(search, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             val original = first.attribution.toList()
             assertTrue(original.any { it.licenses != null })
             fake.goOffline()
@@ -175,7 +175,7 @@ class ClientTest {
                 for (entry in answer.toList()) tryToChange(entry.licenses)
                 tryToChange(answer)
             }
-            assertEquals(original, client.searchPlaces(search, OVERTURE_DATASET, collection = OVERTURE_COLLECTION).attribution)
+            assertEquals(original, client.searchNearby(search, OVERTURE_DATASET, collection = OVERTURE_COLLECTION).attribution)
             assertEquals(served, client.getPlace(origin).attribution)
         }
 
@@ -207,7 +207,7 @@ class ClientTest {
                             ),
                         )
                         val client = client(server)
-                        val places = client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION).places
+                        val places = client.searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION).places
                         assertEquals(1, places.size)
                         assertNull(places[0].collection)
                         val before = server.requests.size
@@ -323,7 +323,7 @@ class ClientTest {
     }
 
     @Nested
-    @DisplayName("searchPlaces results")
+    @DisplayName("searchNearby results")
     inner class SearchPlacesResults {
         private val records = listOf(
             record(
@@ -347,11 +347,11 @@ class ClientTest {
 
         @Test
         fun `returns origin, the wire place, importance, meters distance and null score without text`() = runTest {
-            val result = setup().searchPlaces(circle, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            val result = setup().searchNearby(circle, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             val cafe = assertNotNull(result.places.find { it.origin == placeOrigin("cafe") })
             assertEquals(records[0]["value"], cafe.place)
             assertFalse("importance" in cafe.place)
-            // The reference also asserts the hit has no "uri" property; SearchHit has a fixed shape.
+            // The reference also asserts the hit has no "uri" property; NearbyHit has a fixed shape.
             assertEquals(2L, cafe.importance)
             assertCloseTo(111.195, cafe.distance, 1)
             assertTrue(result.places.all { it.score == null })
@@ -359,12 +359,12 @@ class ClientTest {
 
         @Test
         fun `gives distance 0 to a bbox containing the center`() = runTest {
-            assertEquals(0.0, setup().searchPlaces(circle, OVERTURE_DATASET, collection = OVERTURE_COLLECTION).places.find { it.origin == placeOrigin("division") }?.distance)
+            assertEquals(0.0, setup().searchNearby(circle, OVERTURE_DATASET, collection = OVERTURE_COLLECTION).places.find { it.origin == placeOrigin("division") }?.distance)
         }
 
         @Test
         fun `returns a numeric score with text`() = runTest {
-            val result = setup().searchPlaces(circle, OVERTURE_DATASET, text = "Zanzibar Cafe", collection = OVERTURE_COLLECTION)
+            val result = setup().searchNearby(circle, OVERTURE_DATASET, text = "Zanzibar Cafe", collection = OVERTURE_COLLECTION)
             assertCloseTo(1.0, result.places.find { it.origin == placeOrigin("cafe") }?.score, 2)
             assertTrue(result.places.all { it.score != null })
         }
@@ -372,10 +372,10 @@ class ClientTest {
         @Test
         fun `treats text that normalizes to empty as no text`() = runTest {
             val client = setup()
-            val none = client.searchPlaces(circle, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
-            val blank = client.searchPlaces(circle, OVERTURE_DATASET, text = "   ", collection = OVERTURE_COLLECTION)
+            val none = client.searchNearby(circle, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            val blank = client.searchNearby(circle, OVERTURE_DATASET, text = "   ", collection = OVERTURE_COLLECTION)
             assertTrue(blank.places.isNotEmpty())
-            assertEquals(none, blank)
+            assertEquals(none.rebuilt(NOTHING_SENT), blank)
             assertTrue(blank.places.all { it.score == null })
         }
     }
@@ -390,7 +390,7 @@ class ClientTest {
             sort: SortMode = SortMode.FUSED,
         ): List<String> {
             val server = FakeServer(tilesets = listOf(overture(listOf(FakeTile(tileUrl("a"), values.map { (v, i) -> record(v, i) })))))
-            return client(server).searchPlaces(region, OVERTURE_DATASET, text = text, sort = sort, collection = OVERTURE_COLLECTION).places.map { it.origin.toString().removePrefix(placeOrigin("")) }
+            return client(server).searchNearby(region, OVERTURE_DATASET, text = text, sort = sort, collection = OVERTURE_COLLECTION).places.map { it.origin.toString().removePrefix(placeOrigin("")) }
         }
 
         @Test
@@ -457,9 +457,9 @@ class ClientTest {
         fun `keys the tile list on dataset and collection`() = runTest {
             val fake = fake()
             val client = client(fake)
-            client.searchPlaces(region, dataset = "openstreetmap.org", collection = "way")
-            client.searchPlaces(region, dataset = "openstreetmap.org")
-            client.searchPlaces(region, dataset = "overturemaps.org")
+            client.searchNearby(region, dataset = "openstreetmap.org", collection = "way")
+            client.searchNearby(region, dataset = "openstreetmap.org")
+            client.searchNearby(region, dataset = "overturemaps.org")
             assertEquals(
                 listOf("openstreetmap.org|way", "openstreetmap.org|null", "overturemaps.org|null"),
                 tileListRequests(fake).map { "${it["dataset"]}|${it["collection"]}" },
@@ -477,14 +477,14 @@ class ClientTest {
                     ),
                 ),
             )
-            val places = client(fake).searchPlaces(region, dataset = "openstreetmap.org", collection = "way").places
+            val places = client(fake).searchNearby(region, dataset = "openstreetmap.org", collection = "way").places
             assertEquals(listOf("urn:atgeo:openstreetmap.org:way:2"), places.map { it.origin })
         }
 
         @Test
         fun `searches a whole dataset when only the dataset is named`() = runTest {
             val fake = fake()
-            val places = client(fake).searchPlaces(region, dataset = "openstreetmap.org").places
+            val places = client(fake).searchNearby(region, dataset = "openstreetmap.org").places
             assertEquals(
                 listOf(
                     "https://example.org/r/u",
@@ -501,7 +501,7 @@ class ClientTest {
         @Test
         fun `filters to one collection, dropping records with no origin`() = runTest {
             val fake = fake()
-            val places = client(fake).searchPlaces(region, dataset = "openstreetmap.org", collection = "way").places
+            val places = client(fake).searchNearby(region, dataset = "openstreetmap.org", collection = "way").places
             assertEquals(listOf("urn:atgeo:openstreetmap.org:way:2"), places.map { it.origin })
             assertEquals("way", params(fake)["collection"])
         }
@@ -510,7 +510,7 @@ class ClientTest {
         // one way past the type, a caller that passes null (Java, reflection): the Kotlin compiler emits no null check
         // for the parameters of a suspend function, so the client checks for itself and throws the argument error.
         private fun searchViaReflection(client: AtgeoClient, region: Region, dataset: String?, collection: String?): Any? {
-            val method = AtgeoClient::class.java.methods.single { it.name == "searchPlaces" }
+            val method = AtgeoClient::class.java.methods.single { it.name == "searchNearby" }
             val continuation = object : kotlin.coroutines.Continuation<Any?> {
                 override val context = kotlin.coroutines.EmptyCoroutineContext
 
@@ -538,7 +538,7 @@ class ClientTest {
         @Test
         fun `sends an empty dataset to the server, which answers for itself`() = runTest {
             val fake = fake()
-            assertFailsWith<AtgeoException> { client(fake).searchPlaces(region, "") }
+            assertFailsWith<AtgeoException> { client(fake).searchNearby(region, "") }
             val lists = tileListRequests(fake)
             assertEquals(1, lists.size)
             assertEquals("", lists[0]["dataset"])
@@ -547,13 +547,13 @@ class ClientTest {
         @Test
         fun `sends an empty dataset with a collection too`() = runTest {
             val fake = fake()
-            assertFailsWith<AtgeoException> { client(fake).searchPlaces(region, "", collection = "place") }
+            assertFailsWith<AtgeoException> { client(fake).searchNearby(region, "", collection = "place") }
             assertEquals("", tileListRequests(fake).single()["dataset"])
         }
 
         @Test
         fun `gives each hit the collection its origin names, by prefix, and null to a hit keyed by uri`() = runTest {
-            val hits = client(fake()).searchPlaces(region, "openstreetmap.org").places
+            val hits = client(fake()).searchNearby(region, "openstreetmap.org").places
             assertEquals(
                 mapOf(
                     "urn:atgeo:openstreetmap.org:node:1" to CollectionKey("openstreetmap.org", "node"),
@@ -576,7 +576,7 @@ class ClientTest {
                     ),
                 ),
             )
-            val hits = client(fake).searchPlaces(region, "openstreetmap.org").places
+            val hits = client(fake).searchNearby(region, "openstreetmap.org").places
             assertEquals(
                 mapOf("urn:atgeo:openstreetmap.org:way:2" to "way", "urn:atgeo:openstreetmap.org:wayside:9" to "wayside"),
                 hits.associate { it.origin!! to it.collection?.collection },
@@ -602,7 +602,7 @@ class ClientTest {
                     ),
                 ),
             )
-            val result = client(fake).searchPlaces(region, "openstreetmap.org", collection = "way")
+            val result = client(fake).searchNearby(region, "openstreetmap.org", collection = "way")
             assertEquals(
                 listOf(
                     Attribution("openstreetmap.org", "node", source = "https://www.openstreetmap.org"),
@@ -628,9 +628,9 @@ class ClientTest {
             val client = client(fake)
             assertEquals(
                 listOf("urn:atgeo:openstreetmap.org:way:2"),
-                client.searchPlaces(region, "openstreetmap.org", collection = "way").places.map { it.origin },
+                client.searchNearby(region, "openstreetmap.org", collection = "way").places.map { it.origin },
             )
-            val whole = client.searchPlaces(region, "openstreetmap.org").places
+            val whole = client.searchNearby(region, "openstreetmap.org").places
             assertEquals(
                 mapOf("urn:atgeo:openstreetmap.org:way:2" to CollectionKey("openstreetmap.org", "way"), "urn:atgeo:openstreetmap.org:way:7" to null),
                 whole.associate { it.origin!! to it.collection },
@@ -652,17 +652,17 @@ class ClientTest {
             val client = client(fake)
             assertEquals(
                 listOf("urn:atgeo:openstreetmap.org:way:2"),
-                client.searchPlaces(region, "openstreetmap.org", collection = "way").places.map { it.origin },
+                client.searchNearby(region, "openstreetmap.org", collection = "way").places.map { it.origin },
             )
             assertEquals(
                 mapOf("urn:atgeo:openstreetmap.org:way:2" to "way", "prefix:urn:atgeo:openstreetmap.org:way:5" to null),
-                client.searchPlaces(region, "openstreetmap.org").places.associate { it.origin!! to it.collection?.collection },
+                client.searchNearby(region, "openstreetmap.org").places.associate { it.origin!! to it.collection?.collection },
             )
         }
 
         @Test
         fun `a hit's collection is just the two names, not the attribution entry`() = runTest {
-            val hit = client(fake()).searchPlaces(region, "openstreetmap.org", collection = "way").places.single()
+            val hit = client(fake()).searchNearby(region, "openstreetmap.org", collection = "way").places.single()
             assertEquals(CollectionKey("openstreetmap.org", "way"), hit.collection)
             assertEquals("CollectionKey(dataset=openstreetmap.org, collection=way)", hit.collection.toString())
         }

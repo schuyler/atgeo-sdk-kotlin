@@ -9,6 +9,8 @@ import kotlin.test.assertNotEquals
 
 /** The public result and describe types are plain classes; they must still behave as values (no reference counterpart). */
 class TypesTest {
+    private val D = Disclosure(false, 0.01)
+
     @Test
     fun `describe types survive a serialization round trip, as the README promises`() {
         val tileset = Tileset(
@@ -27,20 +29,20 @@ class TypesTest {
 
     @Test
     fun `results compare, hash and print by value`() {
-        fun hit(score: Double?) = SearchHit("urn:x", CollectionKey("d", "c"), JsonObject(mapOf("name" to JsonPrimitive("A"))), 5, 12.5, score)
+        fun hit(score: Double?) = NearbyHit("urn:x", CollectionKey("d", "c"), JsonObject(mapOf("name" to JsonPrimitive("A"))), 5, 12.5, score)
         assertEquals(hit(0.5), hit(0.5))
         assertEquals(hit(0.5).hashCode(), hit(0.5).hashCode())
         assertNotEquals(hit(0.5), hit(null))
-        assertEquals("SearchHit(origin=urn:x, collection=CollectionKey(dataset=d, collection=c), place={\"name\":\"A\"}, " +
+        assertEquals("NearbyHit(origin=urn:x, collection=CollectionKey(dataset=d, collection=c), place={\"name\":\"A\"}, " +
             "importance=5, distance=12.5, score=0.5)", hit(0.5).toString())
-        val result = SearchResult(listOf(hit(0.5)), true, false, SearchResult.TileCounts(1, 0), emptyList(), emptyList())
-        assertEquals(result, SearchResult(listOf(hit(0.5)), true, false, SearchResult.TileCounts(1, 0), emptyList(), emptyList()))
+        val result = NearbySearchResult(listOf(hit(0.5)), true, false, NearbySearchResult.TileCounts(1, 0), emptyList(), emptyList(), D)
+        assertEquals(result, NearbySearchResult(listOf(hit(0.5)), true, false, NearbySearchResult.TileCounts(1, 0), emptyList(), emptyList(), D))
         val failure = TileFailure("https://t/a.json", TileFailure.Kind.STATUS, 503, AtgeoException("HttpError", "HTTP 503", 503))
-        assertNotEquals(result, SearchResult(listOf(hit(0.5)), false, false, SearchResult.TileCounts(1, 1), listOf(failure), emptyList()))
+        assertNotEquals(result, NearbySearchResult(listOf(hit(0.5)), false, false, NearbySearchResult.TileCounts(1, 1), listOf(failure), emptyList(), D))
         assertEquals(
-            "SearchResult(places=[], complete=false, overview=false, tiles=TileCounts(fetched=0, failed=1), tileFailures=" +
-                "[TileFailure(url=https://t/a.json, kind=STATUS, status=503, error=org.atgeo.client.AtgeoException: HTTP 503)], attribution=[])",
-            SearchResult(emptyList(), false, false, SearchResult.TileCounts(0, 1), listOf(failure), emptyList()).toString(),
+            "NearbySearchResult(places=[], complete=false, overview=false, tiles=TileCounts(fetched=0, failed=1), tileFailures=" +
+                "[TileFailure(url=https://t/a.json, kind=STATUS, status=503, error=org.atgeo.client.AtgeoException: HTTP 503)], attribution=[], disclosed=Disclosure(keyword=false, region=0.01))",
+            NearbySearchResult(emptyList(), false, false, NearbySearchResult.TileCounts(0, 1), listOf(failure), emptyList(), D).toString(),
         )
     }
 
@@ -64,14 +66,14 @@ class TypesTest {
             "PlaceRecord(origin=o, place={\"name\":\"A\"}, importance=1, attribution=[${entry("r")}])",
             PlaceRecord("o", place, 1, listOf(entry("r"))).toString(),
         )
-        val counts = SearchResult.TileCounts(0, 0)
+        val counts = NearbySearchResult.TileCounts(0, 0)
         assertNotEquals(
-            SearchResult(emptyList(), true, false, counts, emptyList(), listOf(entry("r"))),
-            SearchResult(emptyList(), true, false, counts, emptyList(), emptyList()),
+            NearbySearchResult(emptyList(), true, false, counts, emptyList(), listOf(entry("r")), D),
+            NearbySearchResult(emptyList(), true, false, counts, emptyList(), emptyList(), D),
         )
         assertNotEquals(
-            SearchHit("o", CollectionKey("d", "c"), place, null, 0.0, null),
-            SearchHit("o", null, place, null, 0.0, null),
+            NearbyHit("o", CollectionKey("d", "c"), place, null, 0.0, null),
+            NearbyHit("o", null, place, null, 0.0, null),
         )
     }
 
@@ -85,7 +87,7 @@ class TypesTest {
         assertNotEquals(a, failure(TileFailure.Kind.DECODE, null, a.error))
         assertNotEquals(failure(TileFailure.Kind.STATUS, 500, a.error), failure(TileFailure.Kind.STATUS, 502, a.error))
         assertNotEquals(a, TileFailure("https://t/b.json", TileFailure.Kind.TRANSPORT, null, a.error))
-        val results = listOf(a, b).map { SearchResult(emptyList(), false, false, SearchResult.TileCounts(0, 1), listOf(it), emptyList()) }
+        val results = listOf(a, b).map { NearbySearchResult(emptyList(), false, false, NearbySearchResult.TileCounts(0, 1), listOf(it), emptyList(), D) }
         assertEquals(results[0], results[1])
         assertEquals(results[0].hashCode(), results[1].hashCode())
     }
