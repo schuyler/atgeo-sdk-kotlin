@@ -90,8 +90,8 @@ public class AtgeoClient internal constructor(
 
     /**
      * Asks the server to match places by name, so **it sends `keyword` to the server** as given, and says so in
-     * [KeywordSearchResult.disclosed]. The server keeps no log of it (garganorn's privacy design); an operator
-     * who chose to could record what it receives. Use [searchNearby] to keep the text on the device.
+     * [KeywordSearchResult.disclosed]. The server keeps no log of it (garganorn's privacy design), a hostile
+     * operator can record what it receives. Use [searchNearby] to keep the text on the device.
      *
      * `region`, when given, is sent snapped outward to whole degrees (a one-degree grid, coarser than the nearby
      * search's) and as one request. The call is not cached. A keyword the server cannot use (no word of two or
@@ -194,7 +194,9 @@ public class AtgeoClient internal constructor(
      * call, and no other autocompleter's. **Every keyword that qualifies is sent to the server as typed, prefixes
      * included**; see [KeywordAutocomplete.searchByKeyword].
      *
-     * @throws IllegalArgumentException for a null `dataset` or an invalid `region`, here, not at the first call.
+     * @throws NullPointerException for a null `dataset` (only a Java or reflective caller can pass one): this method
+     *   is not `suspend`, so the compiler's own parameter check throws it, naming `dataset`.
+     * @throws IllegalArgumentException for an invalid `region`, here, not at the first call.
      */
     public fun autocompleteByKeyword(
         dataset: String,

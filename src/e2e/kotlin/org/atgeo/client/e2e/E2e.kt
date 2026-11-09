@@ -4,6 +4,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.atgeo.client.AtgeoClient
+import org.atgeo.client.KeywordRegionMode
 import org.atgeo.client.Region
 import org.atgeo.client.SortMode
 
@@ -59,6 +60,18 @@ public fun main(): Unit = runBlocking {
     check(keyword.disclosed.keyword && keyword.disclosed.region == null) { "searchByKeyword disclosed ${keyword.disclosed}" }
     check(keyword.places.any { it.origin == named.origin }) { "named place missing from keyword search" }
     log("searchByKeyword", "\"$name\" -> ${keyword.places.size} places")
+
+    // The name is a word match nearby, so the fallback answers locally and sends nothing (contract §19).
+    val fallback = client.searchNearbyThenByKeyword(region, dataset = dataset, keyword = name, keywordRegion = KeywordRegionMode.DEGREE, collection = collection)
+    check(!fallback.disclosed.keyword && fallback.disclosed.region == null) { "searchNearbyThenByKeyword disclosed ${fallback.disclosed}" }
+    check(fallback.places.any { it.origin == named.origin }) { "named place missing from the fallback search" }
+    log("searchNearbyThenByKeyword", "\"$name\" -> ${fallback.places.size} places, nothing sent")
+
+    // One autocompleter call: the keyword qualifies, so it is sent (as the keyword methods may).
+    val typed = client.autocompleteByKeyword(dataset, collection).searchByKeyword(name)
+    check(typed.disclosed.keyword && typed.disclosed.region == null) { "autocompleter disclosed ${typed.disclosed}" }
+    check(typed.places.any { it.origin == named.origin }) { "named place missing from the autocompleter" }
+    log("autocompleteByKeyword", "\"$name\" -> ${typed.places.size} places")
 
     val origin = named.origin!!
     val record = AtgeoClient(server = server).getPlace(origin)
