@@ -12,6 +12,8 @@ import java.math.BigDecimal
 import java.math.RoundingMode
 import java.net.URI
 import java.net.URLDecoder
+import java.text.Normalizer
+import kotlin.math.abs
 
 // A request-capturing HttpTransport mirroring test/helpers/fakeServer.ts. There is no JVM lexicon
 // validator, so it checks the contract's minimum (§13) plus what fakeServer.test.ts asserts.
@@ -19,7 +21,7 @@ import java.net.URLDecoder
 internal const val DEFAULT_SERVER = "https://places.atgeo.org"
 private const val PUBLISHED_AT = "2026-01-01T00:00:00Z"
 
-/** The dataset and collection a search names: searchPlaces has no defaults (contract §4.1). */
+/** The dataset and collection a search names: searchNearby has no defaults (contract §4.1). */
 internal const val OVERTURE_DATASET = "overturemaps.org"
 internal const val OVERTURE_COLLECTION = "place"
 
@@ -101,6 +103,7 @@ private val URI_FORMAT = Regex("""^[A-Za-z][A-Za-z0-9+.\-]*:(//)?[^\s/]\S*$""")
 private val PARAMS = mapOf(
     "org.atgeo.getTiles" to (setOf("dataset", "collection", "bbox") to setOf("dataset", "bbox")),
     "org.atgeo.getPlace" to (setOf("uri") to setOf("uri")),
+    "org.atgeo.searchPlaces" to (setOf("dataset", "collection", "q", "bbox") to setOf("dataset", "q")),
     "org.atgeo.describeService" to (emptySet<String>() to emptySet()),
     "org.atgeo.describeTileset" to (setOf("slug") to setOf("slug")),
 )
@@ -173,11 +176,20 @@ internal class FakeServer(
             }
             (params.keys - known).firstOrNull()?.let { return xrpcError("InvalidRequest", "Unexpected parameter $it") }
             (required - params.keys).firstOrNull()?.let { return xrpcError("InvalidRequest", "Params must have the property \"$it\"") }
-            params["bbox"]?.let { if (!BBOX.matches(it)) return xrpcError("InvalidRequest", "bbox must match the 0.01° grid format") }
+            // searchPlaces has its own bbox rules (the whole-degree form), applied in its handler.
+            if (nsid == "org.atgeo.getTiles") params["bbox"]?.let {
+                // The server refuses a coordinate with more than two decimals; the client sends exactly two, so any other
+                // form is the client's bug, which the fake reports rather than answers (contract §13).
+                if (it.split(",").any { c -> Regex("""\.\d{3,}$""").containsMatchIn(c) }) {
+                    return xrpcError("BboxTooPrecise", "One or more bbox coordinates have more than 2 decimal places")
+                }
+                if (!BBOX.matches(it)) return xrpcError("InvalidRequest", "bbox must match the 0.01° grid format")
+            }
             params["uri"]?.let { if (!URI_FORMAT.matches(it)) return xrpcError("InvalidRequest", "uri must be a uri") }
             return when (nsid) {
                 "org.atgeo.getTiles" -> getTiles(params.getValue("dataset"), params["collection"], params.getValue("bbox"))
                 "org.atgeo.getPlace" -> getPlace(params.getValue("uri"))
+                "org.atgeo.searchPlaces" -> searchPlaces(params.getValue("dataset"), params["collection"], params.getValue("q"), params["bbox"])
                 "org.atgeo.describeService" -> json(
                     buildJsonObject {
                         put("did", did)
@@ -214,13 +226,20 @@ internal class FakeServer(
 
     private fun JsonObject.str(key: String) = this[key].stringOrNull().orEmpty()
 
-    private fun getTiles(dataset: String, collection: String?, bbox: String): HttpResponse {
+    // The tilesets carrying the dataset (and collection), or the error answer; shared by getTiles and searchPlaces.
+    private fun select(dataset: String, collection: String?): Pair<List<FakeTileset>?, HttpResponse?> {
         val withDataset = tilesets.filter { t -> t.collections.any { it.str("dataset") == dataset } }
-        if (withDataset.isEmpty()) return xrpcError("DatasetNotFound", "Dataset $dataset not found")
+        if (withDataset.isEmpty()) return null to xrpcError("DatasetNotFound", "Dataset $dataset not found")
         val selected = withDataset.filter { t ->
             t.collections.any { it.str("dataset") == dataset && (collection == null || it.str("collection") == collection) }
         }
-        if (selected.isEmpty()) return xrpcError("CollectionNotFound", "Collection $collection not found")
+        if (selected.isEmpty()) return null to xrpcError("CollectionNotFound", "Collection $collection not found")
+        return selected to null
+    }
+
+    private fun getTiles(dataset: String, collection: String?, bbox: String): HttpResponse {
+        val (selected, error) = select(dataset, collection)
+        if (selected == null) return error!!
         val urls = selected.flatMap { t -> t.tiles.map { it.url } }.sorted()
         return when (val answer = tilesFor?.invoke(bbox) ?: TilesAnswer.Urls(urls)) {
             is TilesAnswer.Urls -> json(buildJsonObject { put("tiles", JsonArray(answer.tiles.map(::JsonPrimitive))) })
@@ -234,6 +253,60 @@ internal class FakeServer(
         }
     }
 
+    private fun searchPlaces(dataset: String, collection: String?, q: String, bbox: String?): HttpResponse {
+        if (bbox != null) {
+            val parts = bbox.split(",")
+            // Server order: the precision check, then the bbox rules.
+            if (parts.size == 4 && parts.any { p -> p.contains('e', ignoreCase = true) || (p.contains('.') && p.length - p.indexOf('.') - 1 > 0) }) {
+                return xrpcError("BboxTooPrecise", "bbox coordinate has more than 0 decimal places; snap to 1° grid")
+            }
+            val number = Regex("""^[+-]?(\d+\.?\d*|\.\d+)$""")
+            if (parts.size != 4 || !parts.all { number.matches(it.trim()) }) return xrpcError("InvalidBbox", "bbox must be four comma-separated numbers")
+            val (west, south, east, north) = parts.map { it.trim().toDouble() }
+            if (listOf(west, east).any { abs(it) > 180 } || listOf(south, north).any { abs(it) > 90 }) return xrpcError("InvalidBbox", "bbox out of range")
+            if (south >= north) return xrpcError("InvalidBbox", "bbox requires south < north")
+            if (west >= east && !(west > 0 && east < 0 && west - east < 360)) return xrpcError("InvalidBbox", "bbox requires west < east")
+        }
+        val (selected, error) = select(dataset, collection)
+        if (selected == null) return error!!
+        // The server's own rule, not the SDK's predicate: the first 12 distinct words, one of two or more characters.
+        val words = nameTokens(q).distinct().take(12)
+        if (words.none { it.codePointCount(0, it.length) >= 2 }) return xrpcError("KeywordRequired", "q needs a word of two or more characters")
+        val prefix = collection?.let { "urn:atgeo:$dataset:$it:" }
+        val matches = LinkedHashMap<String, Pair<FakeTileset, JsonObject>>()
+        for (tileset in selected) for (tile in tileset.tiles) for (found in tile.records) {
+            val value = found.getValue("value") as JsonObject
+            val origin = value["origin"].stringOrNull() ?: continue
+            if ((prefix != null && !origin.startsWith(prefix)) || origin in matches) continue
+            val names = listOf(value["name"]) + ((value["variants"] as? JsonArray).orEmpty().map { (it as? JsonObject)?.get("name") })
+            if (names.mapNotNull { it.stringOrNull() }.any { n -> val tokens = nameTokens(n); words.all { w -> tokens.any { it.startsWith(w) } } }) {
+                matches[origin] = tileset to found
+            }
+        }
+        val places = matches.entries
+            .sortedWith(compareByDescending<Map.Entry<String, Pair<FakeTileset, JsonObject>>> { (it.value.second["importance"] as? JsonPrimitive)?.content?.toLong() ?: 0L }.thenBy { it.key })
+            .map { (origin, m) -> placeView(m.first, m.second, origin) }
+        return json(buildJsonObject { put("places", JsonArray(places)) })
+    }
+
+    // The server's name_tokens: lowercase, all marks stripped, apostrophes dropped, punctuation runs to spaces, final sigma folded.
+    private fun nameTokens(s: String): List<String> {
+        val stripped = Normalizer.normalize(Normalizer.normalize(s.lowercase(), Normalizer.Form.NFD).replace(Regex("\\p{M}"), ""), Normalizer.Form.NFC)
+        return stripped.replace(Regex("['\u2019\u02BC]"), "").replace(Regex("\\p{P}+"), " ").replace('\u03C2', '\u03C3')
+            .split(Regex("[\\p{Z}\\s]+")).filter { it.isNotEmpty() }
+    }
+
+    private fun placeView(tileset: FakeTileset, found: JsonObject, origin: String): JsonObject {
+        val parts = origin.split(":")
+        return buildJsonObject {
+            put("uri", origin)
+            put("url", "$server/${parts.getOrNull(2)}/${parts.getOrNull(3)}/${parts.drop(4).joinToString(":")}")
+            found["importance"]?.let { put("importance", it) }
+            put("value", found.getValue("value"))
+            put("attribution", attributionList(tileset))
+        }
+    }
+
     private fun getPlace(origin: String): HttpResponse {
         val parts = origin.split(":")
         val dataset = parts.getOrNull(2)
@@ -242,15 +315,7 @@ internal class FakeServer(
             if (tileset.collections.none { it.str("dataset") == dataset && it.str("collection") == collection }) continue
             for (tile in tileset.tiles) {
                 val found = tile.records.firstOrNull { (it["value"] as JsonObject)["origin"].stringOrNull() == origin } ?: continue
-                return json(
-                    buildJsonObject {
-                        put("uri", origin)
-                        put("url", "$server/$dataset/$collection/${parts.drop(4).joinToString(":")}")
-                        found["importance"]?.let { put("importance", it) }
-                        put("value", found.getValue("value"))
-                        put("attribution", attributionList(tileset))
-                    },
-                )
+                return json(placeView(tileset, found, origin))
             }
         }
         return xrpcError("PlaceNotFound", "Place $origin not found")
@@ -283,6 +348,12 @@ internal fun kotlinx.coroutines.test.TestScope.client(
     server: String = DEFAULT_SERVER,
     clock: () -> Long = System::currentTimeMillis,
 ) = AtgeoClient(server, transport, AtgeoClient.DEFAULT_CACHE_BUDGET_BYTES, kotlinx.coroutines.test.StandardTestDispatcher(testScheduler), clock)
+
+/** The same result with another `disclosed`, for comparing a warm search with the cold one it repeats. */
+internal fun NearbySearchResult.rebuilt(disclosed: Disclosure) =
+    NearbySearchResult(places, complete, overview, tiles, tileFailures, attribution, disclosed)
+
+internal val NOTHING_SENT = Disclosure(keyword = false, region = null)
 
 internal fun tileUrl(n: String) = "https://tiles.example/$n.json"
 

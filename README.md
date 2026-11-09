@@ -1,6 +1,6 @@
 # atgeo-client for Kotlin
 
-A Kotlin client for the atgeo gazetteer served by [garganorn](https://github.com/schuyler/garganorn), which searches places without telling the server what you searched for.
+A Kotlin client for the atgeo gazetteer served by [garganorn](https://github.com/schuyler/garganorn), which searches nearby places without telling the server what you searched for, and says so in the method name when a search might.
 
 It's a port of [@atgeo/client](https://github.com/schuyler/atgeo-sdk-js) and returns the same places in the same order for the same server answers. One artifact runs on the JVM (11 or later) and on Android (API 24 or later). Its only dependencies are kotlinx-coroutines and kotlinx-serialization; HTTP goes through `HttpURLConnection` unless you supply something better.
 
@@ -12,7 +12,7 @@ import org.atgeo.client.Region
 
 val atgeo = AtgeoClient()
 
-val result = atgeo.searchPlaces(
+val result = atgeo.searchNearby(
     region = Region.Circle(lat = 43.0, lon = -71.45, radius = 3000.0), // metres
     dataset = "overturemaps.org",
     text = "pizza",
@@ -25,7 +25,9 @@ for (hit in result.places) {
 }
 ```
 
-`searchPlaces` is a `suspend` function; call it from any coroutine, the main thread included. Misspellings are fine; matching is fuzzy (names whose words start with every query word rank first). If `complete` is `false`, some tiles failed to load and the results are partial; `tileFailures` says which and why. If `overview` is `true`, the region was too big to search in full and you got only its most important places; with `text`, such an answer keeps only the places that match every query word, since the coarse set can't hold the place you meant. `result.attribution` lists whose data you're showing; credit them.
+`searchNearby` is a `suspend` function; call it from any coroutine, the main thread included. Misspellings are fine; matching is fuzzy (names whose words start with every query word rank first). If `complete` is `false`, some tiles failed to load and the results are partial; `tileFailures` says which and why. If `overview` is `true`, the region was too big to search in full and you got only its most important places; with `text`, such an answer keeps only the places that match every query word, since the coarse set can't hold the place you meant. `result.attribution` lists whose data you're showing; credit them. `result.disclosed` says what the server learned during the call.
+
+To find a place that is not nearby, there are three methods with `Keyword` in the name. They send the keyword to the server; see [Keyword search](#keyword-search) before you use them.
 
 ## Installation
 
@@ -71,26 +73,32 @@ Whatever transport you use, don't give it a disk cache, or the client's promise 
 
 ## API
 
-### `searchPlaces(region, dataset, text?, collection?, sort?): SearchResult`
+### `searchNearby(region, dataset, text?, collection?, sort?): NearbySearchResult`
 
 | Parameter | Meaning |
 |---|---|
 | `region` | Required. `Region.Circle(lat, lon, radius)` with the radius in metres, or `Region.Bbox(west, south, east, north)` in degrees, the order of the wire's bbox string. A bbox with `west > east` crosses the antimeridian. |
 | `dataset` | Required, such as `overturemaps.org` or `openstreetmap.org`. There is no default. An empty string is sent to the server as it is. |
-| `text` | Optional search text, matched fuzzily against each place's `name` and its `variants[].name` after lowercasing and stripping accents and extra whitespace. Places scoring below 0.6 are dropped. |
+| `text` | Optional search text, matched fuzzily against each place's `name` and its `variants[].name` after lowercasing and stripping accents and extra whitespace. The text never leaves the device. A place whose name has every query word as the start of one of its words is kept whatever it scores; any other place needs a score of at least 0.8. |
 | `collection` | Optional, such as `place` or `way`. |
 | `sort` | `SortMode.FUSED` (default), `DISTANCE` or `SIMILARITY`. |
 
 With only a `dataset` you search every collection of it together; with a `collection` too, that collection alone.
 
 ```kotlin
-class SearchResult(
-    val places: List<SearchHit>,
+class NearbySearchResult(
+    val places: List<NearbyHit>,
     val complete: Boolean,        // false if any tile failed to load
     val overview: Boolean,        // true if the server answered with its coarse overview
     val tiles: TileCounts,        // fetched and failed
     val tileFailures: List<TileFailure>, // each failed tile, in tile URL order; empty if complete
     val attribution: List<Attribution>,  // credit for every collection in the tiles used; sorted; never null
+    val disclosed: Disclosure,    // what the server learned during this call
+)
+
+class Disclosure(
+    val keyword: Boolean,         // the keyword was sent
+    val region: Double?,          // the grid in degrees of the finest region sent: 0.01 or 1.0; null if none
 )
 
 class Attribution(                // one collection's credit; read-only, and so is `licenses`
@@ -107,7 +115,7 @@ class TileFailure(
     val error: Throwable,         // what was thrown; not part of equals or hashCode
 )
 
-class SearchHit(
+class NearbyHit(              // a PlaceHit; `via` is Via.TILES
     val origin: String?,          // place.origin, else the tile record's uri, else null
     val collection: CollectionKey?, // which collection the place belongs to; null if its tile doesn't say
     val place: JsonObject,        // the record value, exactly as served
@@ -126,7 +134,7 @@ These are plain classes rather than data classes, so that later versions can add
 
 `attribution` is the union of what every tile the search used says about its data, one entry per dataset and collection (the first tile in URL order wins), sorted by dataset then collection. It includes collections the tile only references, so a hit's neighbouring division is credited too, and it counts tiles whose places were all filtered out. `collection` is matched against the tile the hit came from, on `place.origin` alone: a hit identified only by its uri has none. Nothing you do to either, `licenses` included, changes the cache.
 
-With `text`, places scoring below 0.6 are dropped. The rest rank in two tiers, whatever the sort mode: a place with a name (its own or a variant) that has every word of the query as the start of one of its words (apostrophes ignored, other punctuation splitting words, so `mcdonalds` finds `McDonald's` and `st louis` finds `St. Louis`) comes before one that matches only fuzzily. Within a tier, the sort mode decides.
+With `text`, a place that matches word for word is always kept, however short the query makes its score, and a place that matches only fuzzily is kept at 0.8 or better (one or two typos score above 0.82). A query made only of punctuation has no words to match, and keeps places scoring 0.6 or better. The kept places rank in two tiers, whatever the sort mode: a place with a name (its own or a variant) that has every word of the query as the start of one of its words (apostrophes ignored, other punctuation splitting words, so `mcdonalds` finds `McDonald's` and `st louis` finds `St. Louis`) comes before one that matches only fuzzily. Within a tier, the sort mode decides.
 
 `FUSED` orders by tier, then by similarity, breaking near-ties by importance, then distance. `DISTANCE` orders by tier, then nearest first, then the smaller place, then importance, then similarity. `SIMILARITY` orders by tier, then similarity, then distance, and needs `text`. Scores are compared to three decimals and remaining ties break on `origin`, so the order is deterministic.
 
@@ -147,16 +155,37 @@ A tileset's collections, attribution, extent and `overview` (`overview.records`,
 ### Errors
 
 - `AtgeoException` has the server's error `code` (`PlaceNotFound`, `BboxTooLarge`, `DatasetNotFound` and so on), or `HttpError` when the server didn't send one, and the HTTP `status`. Use `status` to tell a request the server refused (4xx) from one it failed to answer (5xx); codes are an open list and new ones may appear.
-- `searchPlaces` throws `IllegalArgumentException` for an invalid region or for `SIMILARITY` without text, before any request. `dataset` is a non-null `String`, so leaving it out doesn't compile; a caller that passes `null` anyway (from Java, say) gets an `IllegalArgumentException` mentioning `dataset`, before the region is even looked at.
+- `searchNearby` throws `IllegalArgumentException` for an invalid region or for `SIMILARITY` without text, before any request. `searchByKeyword`, `searchNearbyThenByKeyword` and `autocompleteByKeyword` throw it for an invalid region too (the keyword region is a box, so a circle does not compile). `dataset` is a non-null `String`, so leaving it out doesn't compile; a caller that passes `null` anyway (from Java, say) gets an `IllegalArgumentException` mentioning `dataset` from the three `suspend` methods, and a `NullPointerException` naming `dataset` from `autocompleteByKeyword`, before the region is even looked at either way.
 - A failed `getTiles` fails the search. A failed tile does not: it's skipped, counted in `tiles.failed`, listed in `tileFailures`, and `complete` is `false`. Each entry says where the tile failed. `REFUSED`: the server listed a URL that isn't an absolute `http` or `https` URL, or that has a username or password in it, and no request was made. `STATUS`: the tile answered outside 2xx, and `status` and an `AtgeoException` say how. `DECODE`: a 2xx whose body isn't a tile payload. `TRANSPORT`: the transport threw, and `error` is what it threw, so a body over `maxBodyBytes`, a timeout, or a bug in a transport of your own shows up here rather than vanishing into a count. Two results with the same failures are equal whatever their `error`s say. The library logs nothing; what you do with `tileFailures` is up to you, and nothing about a failure is sent anywhere.
 - A 2xx body with nothing usable in it, or that isn't JSON, throws `AtgeoDecodingException`, an `IOException`: as far as your app is concerned the answer didn't arrive. Retrying rarely helps; the server sends the same body again. Network errors come through as whatever the transport throws, usually `IOException`. A transport that gives up by throwing `CancellationException` while your coroutine is still running (its own `withTimeout`, say) is reported as `SocketTimeoutException`, or as `IOException` for anything but a timeout, so that it can't end your coroutine silently.
-- Cancelling the calling coroutine stops the search and throws `CancellationException`.
+- Cancelling the calling coroutine stops the search and throws `CancellationException`. A request whose cancellation has already happened is never handed to the transport, so a transport of your own that ignores cancellation cannot send it.
 
 So the type tells you what went wrong: `IllegalArgumentException` is a bad argument, `AtgeoException` an answer the server refused or failed, and an `IOException` (with the default transport) means no usable answer arrived. As anywhere in coroutines, don't let a `catch (e: Exception)` swallow `CancellationException`; rethrow it.
 
+## Keyword search
+
+`searchNearby` keeps your text on the device by downloading the tiles around you. That cannot find a place that is not nearby, so there are three methods that ask the server instead. **Each of them sends the keyword to the server.** That is the trade: you get a place you could not have downloaded, and the server learns what you searched for. The server keeps no log of it (garganorn's privacy design), a hostile operator can record what it receives. Nothing here recommends or discourages the trade. It is yours to make, and the method names, the required `keywordRegion` and `disclosed` are there so that you make it knowingly.
+
+```kotlin
+// One request; the keyword goes to the server. region is a box, never a circle, and goes snapped outward to whole degrees.
+suspend fun searchByKeyword(keyword: String, dataset: String, collection: String? = null, region: KeywordRegion? = null): KeywordSearchResult
+
+// Searches nearby with the keyword kept local; sends it only if that finds no word match.
+suspend fun searchNearbyThenByKeyword(region: Region, dataset: String, keyword: String, keywordRegion: KeywordRegionMode, collection: String? = null, sort: SortMode = SortMode.FUSED): FallbackSearchResult
+
+// For a search box. Every keyword that qualifies is sent as typed, prefixes included.
+fun autocompleteByKeyword(dataset: String, collection: String? = null, region: KeywordRegion? = null): KeywordAutocomplete
+```
+
+- `searchByKeyword` makes one `searchPlaces` request: `dataset`, `collection` if given, `q` (the keyword exactly as passed) and, if a `region` was given, `bbox` as four whole numbers (`-123,37,-122,38`), the smallest whole-degree box that covers it. That is a coarser region than `searchNearby` sends (1 degree against 0.01). The server answers `KeywordRequired` for a keyword with no word of two or more characters, and `InvalidRequest` for one over 256 bytes of UTF-8; both come back as `AtgeoException`. The result has `places: List<KeywordHit>` in the server's order (a `KeywordHit` has `via = Via.KEYWORD`, `origin`, `collection`, `place`, `importance`, `name` and `location`, but no `distance` or `score`; compute a distance from `location` if you need one), `attribution` and `disclosed`. It is not cached.
+- `searchNearbyThenByKeyword` runs `searchNearby` with the keyword as `text`. If any nearby hit matches word for word, that is the result and nothing is sent. If the keyword could not qualify, the same. Otherwise it sends the keyword as `searchByKeyword` does, with the nearby region as a whole-degree box for `KeywordRegionMode.DEGREE` and no region for `NONE`; you choose, every time. The result lists the keyword hits first, then the nearby hits they did not repeat, and its `disclosed` says what went out. A `KeywordRequired` refusal is no answer: you get the nearby result, with `disclosed.keyword` true because the keyword went out. Any other failure of the keyword request throws, and the nearby results are lost; **the keyword may already have reached the server, and the exception carries no `disclosed`.**
+- `autocompleteByKeyword` returns a `KeywordAutocomplete` for one text field; two fields on one client do not affect each other. Its `searchByKeyword(keyword)` sends every keyword that qualifies, prefixes included, and does not debounce; the server keeps no log of them (garganorn's privacy design), a hostile operator can record what it receives; debouncing reduces how many prefixes go out and is your choice. A keyword the server would refuse as too short resolves an empty result without a request (`disclosed.keyword` false). Each call supersedes the previous call on the same autocompleter, which throws `CancellationException` although its caller is still active: **treat a `CancellationException` from an autocompleter as "superseded" and ignore the answer** (left uncaught in a `launch {}` it ends that coroutine quietly, which is what you want). Cancelling your own call cancels the request too.
+
+`disclosed` is on every result: `keyword` is true exactly when a `searchPlaces` request was made, and `region` is the finest grid among the regions sent (`0.01`, `1.0`, or null for none). A warm `searchNearby` answered from cache reports null, though an earlier call told the server about the area: the field is about the call.
+
 ## Privacy
 
-Your search text never leaves the device. Neither does your precise location.
+With `searchNearby` (only), your search text never leaves the device. Neither does your precise location. A method whose name contains `Keyword` may send the keyword, as [Keyword search](#keyword-search) says; no other method does.
 
 A search asks the server which tiles cover a bounding box snapped outward to a 0.01° grid (roughly 1 km), downloads those tiles, and does the matching, filtering and ranking locally. The server learns the cell, the dataset and collection, and which tiles you fetched that weren't already cached. It also sees your IP address and the transport's own fixed headers. The default transport sends `User-Agent: atgeo-client-kotlin` rather than the platform's, which on Android names the OS release, the device model and its firmware build; a transport of your own sends whatever its HTTP stack does (OkHttp's is `okhttp/<version>`). The [JavaScript README](https://github.com/schuyler/atgeo-sdk-js#privacy) lists exactly what goes on the wire; it's the same here, and the test suite checks it against a request-capturing fake server.
 
@@ -184,7 +213,7 @@ ATGEO_SERVER=http://localhost:8000 ./gradlew e2e
 
 The end-to-end check takes the same `ATGEO_SERVER`, `ATGEO_DATASET`, `ATGEO_COLLECTION` and `ATGEO_REGION` variables as the JavaScript one. It can't pass until a server with garganorn#27 is deployed, because `getPlace` answers differently now. It still runs, and it's not skipped.
 
-`src/test/resources/fixtures/` holds the shared fixtures, copied from atgeo-sdk-js at the commit named in `SOURCE` (`./gradlew test` runs `lenient-readers.json`, `attribution-scenarios.json` and `match-tiers.json` along with the rest), and the garganorn lexicons, with their own `SOURCE`.
+`src/test/resources/fixtures/` holds the shared fixtures, copied from atgeo-sdk-js at the commit named in `SOURCE` (`./gradlew test` runs every one of them), and the garganorn lexicons, with their own `SOURCE`.
 
 ## License
 

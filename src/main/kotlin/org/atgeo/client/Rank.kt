@@ -3,9 +3,12 @@ package org.atgeo.client
 import kotlin.math.PI
 import kotlin.math.sin
 
+// Contract §7: a word match (tier 1) is kept whatever its score; a fuzzy-only match (tier 2) needs FUZZY_THRESHOLD.
+// A query with text whose words all fold away has no tokens to match, so it falls back to JW_THRESHOLD.
 private const val JW_THRESHOLD = 0.6
+private const val FUZZY_THRESHOLD = 0.8
 
-private class Ranked(val hit: SearchHit, val specificity: Double, val tier: Int, val index: Int)
+private class Ranked(val hit: NearbyHit, val specificity: Double, val tier: Int, val index: Int)
 
 // Relative spherical area; a point is 0, so it ranks before any box containing it.
 private fun specificity(locations: Locations): Double {
@@ -50,8 +53,9 @@ private fun order(sort: SortMode): Comparator<Ranked> = when (sort) {
 
 /**
  * Scores, filters and orders records that already passed the region filter (contract §7, §8).
- * `query` is already normalized; "" means no text. With text on an overview answer, tier-2 (fuzzy only)
- * hits are dropped.
+ * `query` is already normalized; "" means no text. A tier-1 hit is kept at any score and a tier-2 hit needs
+ * [FUZZY_THRESHOLD] (a query whose words all fold away needs [JW_THRESHOLD]). With text on an overview answer,
+ * tier-2 (fuzzy only) hits are dropped.
  */
 internal fun rank(
     records: List<TileRecord>,
@@ -60,19 +64,20 @@ internal fun rank(
     sort: SortMode,
     overview: Boolean = false,
     collectionOf: (TileRecord) -> CollectionKey? = { null },
-): List<SearchHit> {
+): List<NearbyHit> {
     val middle = center(region)
+    val wordless = query.isNotEmpty() && queryTokens(query).isEmpty()
     val ranked = ArrayList<Ranked>(records.size)
     for (record in records) {
         val score = if (query.isNotEmpty()) textScore(query, record.value) else null
-        if (score != null && score < JW_THRESHOLD) continue
         // No text, no tier: every hit ties on it. Tier 1 sorts before 2.
         val tier = if (score == null) 0 else matchTier(query, record.value)
+        if (score != null && score < (if (wordless) JW_THRESHOLD else if (tier == 2) FUZZY_THRESHOLD else 0.0)) continue
         if (tier == 2 && overview) continue
         val locations = locate(record.value)
         // Never null here: the region filter already required a location.
         val distance = distanceTo(locations, middle.lat, middle.lon) ?: continue
-        val hit = SearchHit(recordKey(record), collectionOf(record), record.value, record.importance, distance, score)
+        val hit = NearbyHit(recordKey(record), collectionOf(record), record.value, record.importance, distance, score)
         ranked.add(Ranked(hit, specificity(locations), tier, ranked.size))
     }
     return ranked.sortedWith(order(sort)).map { it.hit }

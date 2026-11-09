@@ -114,6 +114,29 @@ internal fun readPlace(body: JsonElement): PlaceAnswer {
     return PlaceAnswer(value, obj["importance"].int64OrNull(), readAttribution(obj["attribution"]).orEmpty())
 }
 
+/** One kept element of a searchPlaces answer. [origin] is null when neither `value.origin` nor `uri` is a string. */
+internal class SearchPlace(val origin: String?, val value: JsonObject, val importance: Long?, val attribution: List<Attribution>)
+
+/**
+ * A searchPlaces answer (contract §1): the elements of `places` that are objects with an object `value`, in served
+ * order and not deduplicated, each with its origin (`value.origin` if a string, else `uri` if a string, else null),
+ * importance and attribution (empty unless an array). `url` is not read. Throws AtgeoDecodingException when the body
+ * is not an object whose `places` is an array.
+ */
+internal fun readSearchPlaces(body: JsonElement): List<SearchPlace> {
+    val places = (body as? JsonObject)?.get("places") as? JsonArray ?: unusable("searchPlaces body has no places array")
+    return places.mapNotNull { element ->
+        val o = element as? JsonObject ?: return@mapNotNull null
+        val value = o["value"] as? JsonObject ?: return@mapNotNull null
+        SearchPlace(
+            origin = value["origin"].stringOrNull() ?: o["uri"].stringOrNull(),
+            value = value,
+            importance = o["importance"].int64OrNull(),
+            attribution = readAttribution(o["attribution"]).orEmpty(),
+        )
+    }
+}
+
 private fun JsonObject.string(key: String): String? = this[key].stringOrNull()
 
 // An optional list: absent unless an array; elements that do not map are dropped.

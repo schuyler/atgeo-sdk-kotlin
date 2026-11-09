@@ -55,7 +55,7 @@ class RobustnessTest {
                 dynamicTest(body) {
                     runTest {
                         val server = FakeServer(responses = mapOf(GET_TILES to raw(body)))
-                        assertFailsWith<AtgeoDecodingException> { client(server).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION) }
+                        assertFailsWith<AtgeoDecodingException> { client(server).searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION) }
                     }
                 }
             }
@@ -68,8 +68,8 @@ class RobustnessTest {
                 if (url == GET_TILES && calls++ == 0) raw("{}") else good.get(url)
             }
             val client = client(flaky)
-            assertFailsWith<AtgeoDecodingException> { client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION) }
-            assertEquals(listOf(placeOrigin("a")), client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION).places.map { it.origin })
+            assertFailsWith<AtgeoDecodingException> { client.searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION) }
+            assertEquals(listOf(placeOrigin("a")), client.searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION).places.map { it.origin })
             assertEquals(2, calls)
         }
 
@@ -81,8 +81,8 @@ class RobustnessTest {
                     tileUrl("t") to raw("""{"records": [${record(ok("a"))}]}"""),
                 ),
             )
-            val result = client(server).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
-            assertEquals(SearchResult.TileCounts(fetched = 1, failed = 0), result.tiles)
+            val result = client(server).searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            assertEquals(NearbySearchResult.TileCounts(fetched = 1, failed = 0), result.tiles)
             assertEquals(listOf(GET_TILES, tileUrl("t")), server.requests)
         }
     }
@@ -92,15 +92,15 @@ class RobustnessTest {
     inner class TileRecords {
         @Test
         fun `skip records that are not objects or have no object value, and keep the tile`() = runTest {
-            val result = client(tileServing("""[7, "s", [1], null, {"value": null}, {}, {"importance": 3}, ${record(ok("a"))}]""")).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
-            assertEquals(SearchResult.TileCounts(fetched = 1, failed = 0), result.tiles)
+            val result = client(tileServing("""[7, "s", [1], null, {"value": null}, {}, {"importance": 3}, ${record(ok("a"))}]""")).searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            assertEquals(NearbySearchResult.TileCounts(fetched = 1, failed = 0), result.tiles)
             assertEquals(listOf(placeOrigin("a")), result.places.map { it.origin })
         }
 
         @Test
         fun `skip a scalar value without consuming its dedupe key`() = runTest {
             val noOrigin = place("x", "By uri", listOf(inside), mapOf("origin" to null))
-            val result = client(tileServing("""[{"value": 5, "uri": "u"}, ${record(noOrigin, uri = "u")}]""")).searchPlaces(region, dataset = "overturemaps.org")
+            val result = client(tileServing("""[{"value": 5, "uri": "u"}, ${record(noOrigin, uri = "u")}]""")).searchNearby(region, dataset = "overturemaps.org")
             assertEquals(listOf("u"), result.places.map { it.origin })
         }
 
@@ -108,7 +108,7 @@ class RobustnessTest {
         fun `keep answering getPlace from a tile that held bad records`() = runTest {
             val server = tileServing("""[null, 7, ${record(ok("a"), 4)}]""")
             val client = client(server)
-            client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            client.searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             server.goOffline()
             assertEquals(PlaceRecord(placeOrigin("a"), ok("a"), 4, emptyList()), client.getPlace(placeOrigin("a")))
         }
@@ -116,13 +116,13 @@ class RobustnessTest {
         @Test
         fun `read a non-string uri as absent`() = runTest {
             val noOrigin = place("x", "Anon", listOf(inside), mapOf("origin" to null))
-            val result = client(tileServing("""[{"value": $noOrigin, "uri": {}}, {"value": $noOrigin, "uri": 9}]""")).searchPlaces(region, dataset = "overturemaps.org")
+            val result = client(tileServing("""[{"value": $noOrigin, "uri": {}}, {"value": $noOrigin, "uri": 9}]""")).searchNearby(region, dataset = "overturemaps.org")
             assertEquals(listOf(null, null), result.places.map { it.origin })
         }
 
         @Test
         fun `read a non-number importance as absent`() = runTest {
-            val result = client(tileServing("""[{"value": ${ok("a")}, "importance": "7"}, {"value": ${ok("b")}, "importance": [1]}]""")).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            val result = client(tileServing("""[{"value": ${ok("a")}, "importance": "7"}, {"value": ${ok("b")}, "importance": [1]}]""")).searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(listOf(null, null), result.places.map { it.importance })
         }
     }
@@ -134,11 +134,11 @@ class RobustnessTest {
         private val good = """{"value": ${ok("good")}, "importance": 4}"""
         private val overturePlace = Attribution("overturemaps.org", "place")
 
-        private suspend fun TestScope.search(tile: String): SearchResult {
+        private suspend fun TestScope.search(tile: String): NearbySearchResult {
             val server = FakeServer(
                 responses = mapOf(GET_TILES to raw("""{"tiles": ["${tileUrl("a")}"]}"""), tileUrl("a") to raw(tile)),
             )
-            return client(server).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            return client(server).searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
         }
 
         @Test
@@ -156,7 +156,7 @@ class RobustnessTest {
                     runTest {
                         val result = search("""{"records": [$good], "attribution": $attribution}""")
                         assertEquals(true, result.complete)
-                        assertEquals(SearchResult.TileCounts(fetched = 1, failed = 0), result.tiles)
+                        assertEquals(NearbySearchResult.TileCounts(fetched = 1, failed = 0), result.tiles)
                         assertEquals(emptyList(), result.tileFailures)
                         assertEquals(emptyList(), result.attribution)
                         assertEquals(listOf(placeOrigin("good")), result.places.map { it.origin })
@@ -181,20 +181,20 @@ class RobustnessTest {
         @Test
         fun `skip null and other non-object locations`() = runTest {
             val value = place("a", "A", listOf(JsonNull, JsonPrimitive(3), JsonArray(emptyList()), inside))
-            assertEquals(listOf(placeOrigin("a")), client(tileServing("[${record(value)}]")).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION).places.map { it.origin })
+            assertEquals(listOf(placeOrigin("a")), client(tileServing("[${record(value)}]")).searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION).places.map { it.origin })
         }
 
         @Test
         fun `skip null variants when the search has text`() = runTest {
             val value = place("m", "München", listOf(inside), mapOf("variants" to JsonArray(listOf(JsonNull, buildJsonObject { put("name", "Munich") }))))
-            val hits = client(tileServing("[${record(value)}]")).searchPlaces(region, OVERTURE_DATASET, text = "Munich", collection = OVERTURE_COLLECTION).places
+            val hits = client(tileServing("[${record(value)}]")).searchNearby(region, OVERTURE_DATASET, text = "Munich", collection = OVERTURE_COLLECTION).places
             assertEquals(listOf(1.0), hits.map { it.score })
         }
 
         @Test
         fun `read a coordinate given as an array as no location`() = runTest {
             val arrayed = JsonObject(inside + ("latitude" to JsonArray(listOf(JsonPrimitive(37.775)))))
-            assertEquals(emptyList(), client(tileServing("[${record(place("a", "A", listOf(arrayed)))}]")).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION).places)
+            assertEquals(emptyList(), client(tileServing("[${record(place("a", "A", listOf(arrayed)))}]")).searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION).places)
         }
     }
 
@@ -207,7 +207,7 @@ class RobustnessTest {
                 dynamicTest(body) {
                     runTest {
                         val server = FakeServer(responses = mapOf(GET_TILES to raw(body, 400)))
-                        val error = assertFailsWith<AtgeoException> { client(server).searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION) }
+                        val error = assertFailsWith<AtgeoException> { client(server).searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION) }
                         assertEquals("HttpError" to "HTTP 400", error.code to error.message)
                     }
                 }

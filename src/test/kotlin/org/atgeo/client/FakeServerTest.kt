@@ -136,4 +136,64 @@ class FakeServerTest {
             assertEquals(JsonPrimitive("PlaceNotFound"), (parseBody(fake.get("$DEFAULT_SERVER/xrpc/org.atgeo.getPlace?uri=urn%3Aatgeo%3Ax%3Ay%3Az").body) as JsonObject)["error"])
         }
     }
+
+    @Nested
+    @DisplayName("fake server searchPlaces")
+    inner class SearchPlacesAnswers {
+        private val records = listOf(
+            record(place("a", "Starbucks", listOf(point(37.772, -122.412))), 5),
+            record(place("b", "McDonald's", listOf(point(37.773, -122.413)), mapOf("variants" to JsonArray(listOf(buildJsonObject { put("name", "Mickey D's") })))), 9),
+        )
+        private fun search(query: String): Pair<Int, JsonObject> {
+            val r = kotlinx.coroutines.runBlocking { build(records).get("$DEFAULT_SERVER/xrpc/org.atgeo.searchPlaces?$query") }
+            return r.status to (kotlinx.serialization.json.Json.parseToJsonElement(r.body.decodeToString()) as JsonObject)
+        }
+        private val base = "dataset=overturemaps.org&q=star"
+        private fun uris(body: JsonObject) = (body["places"] as JsonArray).map { ((it as JsonObject)["uri"] as JsonPrimitive).content }
+
+        @Test
+        fun `matches each keyword word as a prefix of a word of one name`() {
+            assertEquals(listOf(placeOrigin("a")), uris(search(base).second))
+            for (q in listOf("mcdonalds", "mickey", "D%27s%20mick")) assertEquals(1, uris(search("dataset=overturemaps.org&q=$q").second).size)
+            assertEquals(emptyList(), uris(search("dataset=overturemaps.org&q=mcd%20starb").second))
+        }
+
+        @Test
+        fun `answers 400 KeywordRequired to a keyword with no word of two characters`() {
+            for (q in listOf("a", "%ED%95%98", "%E0%A4%95%E0%A4%BE", "a%20b%27", "%20%20")) {
+                val (status, body) = search("dataset=overturemaps.org&q=$q")
+                assertEquals(400 to "KeywordRequired", status to (body["error"] as JsonPrimitive).content, q)
+            }
+        }
+
+        @Test
+        fun `answers the bbox errors of the server`() {
+            for ((bbox, error) in listOf(
+                "-76.0,39,-75,40" to "BboxTooPrecise", "-76,39,-75,40.5" to "BboxTooPrecise", "1e1,39,20,40" to "BboxTooPrecise",
+                "-76,39,-75" to "InvalidBbox", "a,39,-75,40" to "InvalidBbox", "-76,40,-75,40" to "InvalidBbox",
+                "-75,39,-76,40" to "InvalidBbox", "10,39,10,40" to "InvalidBbox", "180,39,-180,40" to "InvalidBbox",
+                "0,39,-1,40" to "InvalidBbox", "-181,39,-75,40" to "InvalidBbox", "-76,39,-75,91" to "InvalidBbox",
+            )) assertEquals(error, (search("$base&bbox=$bbox").second["error"] as JsonPrimitive).content, bbox)
+            for (bbox in listOf("-76,39,-75,40", "76.,39,77,40", "170,39,-170,40", "-180,39,180,40")) assertEquals(200, search("$base&bbox=$bbox").first, bbox)
+        }
+
+        @Test
+        fun `checks the precision, then the bbox, then the dataset, then the keyword`() {
+            fun error(q: String) = (search(q).second["error"] as JsonPrimitive).content
+            assertEquals("BboxTooPrecise", error("dataset=nope&q=a&bbox=1.5,2,1,3"))
+            assertEquals("InvalidBbox", error("dataset=nope&q=a&bbox=2,2,1,3"))
+            assertEquals("DatasetNotFound", error("dataset=nope&q=a"))
+            assertEquals("CollectionNotFound", error("dataset=overturemaps.org&collection=nope&q=a"))
+            assertEquals("KeywordRequired", error("dataset=overturemaps.org&q=a"))
+        }
+
+        @Test
+        fun `answers getTiles BboxTooPrecise for a coordinate finer than two decimals`() {
+            for (bbox in listOf("-122.4194,37.77,-122.41,37.78", "-122.42,37.77,-122.41,37.7801")) {
+                val r = kotlinx.coroutines.runBlocking { build(records).get("$DEFAULT_SERVER/xrpc/org.atgeo.getTiles?dataset=overturemaps.org&bbox=$bbox") }
+                assertEquals(400, r.status)
+                assertTrue("BboxTooPrecise" in r.body.decodeToString())
+            }
+        }
+    }
 }

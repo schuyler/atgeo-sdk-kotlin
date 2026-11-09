@@ -13,7 +13,7 @@ import kotlin.test.assertEquals
 /** match-tiers.json: a query, a place built from `place.name` and `place.variants`, and the tier (contract §7). */
 class MatchTiersTest {
     @TestFactory
-    fun cases(): List<DynamicTest> = (fixture("match-tiers.json") as JsonArray).map { element ->
+    fun cases(): List<DynamicTest> = (fixture("match-tiers.json") as JsonArray + fixture("match-tiers-lone-surrogates.json") as JsonArray).map { element ->
         val c = element as JsonObject
         dynamicTest(c.getValue("name").jsonPrimitive.content) {
             val place = c.getValue("place") as JsonObject

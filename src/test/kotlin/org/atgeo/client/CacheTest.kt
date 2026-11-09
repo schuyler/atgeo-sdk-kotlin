@@ -57,10 +57,11 @@ class CacheTest {
         fun `answers an identical second search offline`() = runTest {
             val fake = setup()
             val client = client(fake)
-            val first = client.searchPlaces(region, OVERTURE_DATASET, text = "Alpha", collection = OVERTURE_COLLECTION)
+            val first = client.searchNearby(region, OVERTURE_DATASET, text = "Alpha", collection = OVERTURE_COLLECTION)
             fake.goOffline()
-            val second = client.searchPlaces(region, OVERTURE_DATASET, text = "Alpha", collection = OVERTURE_COLLECTION)
-            assertEquals(first, second)
+            val second = client.searchNearby(region, OVERTURE_DATASET, text = "Alpha", collection = OVERTURE_COLLECTION)
+            assertEquals(first.rebuilt(NOTHING_SENT), second)
+            assertEquals(Disclosure(false, 0.01), first.disclosed)
             assertTrue(first.places.isNotEmpty())
         }
 
@@ -68,9 +69,9 @@ class CacheTest {
         fun `reuses tiles for a different text over the same region`() = runTest {
             val fake = setup()
             val client = client(fake)
-            client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            client.searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             val before = fake.requests.size
-            client.searchPlaces(region, OVERTURE_DATASET, text = "Alpha", collection = OVERTURE_COLLECTION)
+            client.searchNearby(region, OVERTURE_DATASET, text = "Alpha", collection = OVERTURE_COLLECTION)
             assertEquals(before, fake.requests.size)
         }
 
@@ -78,8 +79,8 @@ class CacheTest {
         fun `makes no tile request for a repeated search`() = runTest {
             val fake = setup()
             val client = client(fake)
-            client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
-            client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            client.searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            client.searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(1, fake.requests.count { it == tileUrl("a") })
         }
     }
@@ -93,12 +94,12 @@ class CacheTest {
         fun `gives a warm offline search the same, non-empty attribution and hit collections`() = runTest {
             val fake = setup()
             val client = client(fake)
-            val first = client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            val first = client.searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertTrue(first.attribution.isNotEmpty())
             assertTrue(first.places.isNotEmpty())
             for (hit in first.places) assertEquals(CollectionKey("overturemaps.org", "place"), hit.collection)
             fake.goOffline()
-            val second = client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            val second = client.searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(first.attribution, second.attribution)
             assertEquals(first.places.map { it.collection }, second.places.map { it.collection })
         }
@@ -120,8 +121,8 @@ class CacheTest {
                 tilesFor = { bbox -> TilesAnswer.Urls(listOf(if (bbox.startsWith("-122")) tileUrl("a") else tileUrl("b"))) },
             )
             val client = client(fake)
-            val a = client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
-            val b = client.searchPlaces(Region.Bbox(-100.5, 10.5, -100.4, 10.6), OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            val a = client.searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            val b = client.searchNearby(Region.Bbox(-100.5, 10.5, -100.4, 10.6), OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(listOf(overturePlace, Attribution("ref-a.example", "c")), a.attribution)
             assertEquals(listOf(overturePlace, Attribution("ref-b.example", "c")), b.attribution)
         }
@@ -130,11 +131,11 @@ class CacheTest {
         fun `keeps the attribution of a tile that is parsed again from its body`() = runTest {
             val fake = setup()
             val client = client(fake)
-            val first = client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            val first = client.searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             // Another search replaces the parsed memo, so the first search's tile comes back from its cached body.
-            client.searchPlaces(Region.Circle(lat = 10.0, lon = 10.0, radius = 1000.0), "example.org", collection = "thing")
+            client.searchNearby(Region.Circle(lat = 10.0, lon = 10.0, radius = 1000.0), "example.org", collection = "thing")
             fake.goOffline()
-            val again = client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            val again = client.searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(listOf(overturePlace), again.attribution)
             assertEquals(first.attribution, again.attribution)
             assertEquals(CollectionKey("overturemaps.org", "place"), again.places.first().collection)
@@ -149,15 +150,15 @@ class CacheTest {
             var now = MIDNIGHT
             val fake = setup()
             val client = client(fake, clock = { now })
-            client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            client.searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             val base = fake.requests.size
 
             now = MIDNIGHT + 3_599_000 // 00:59:59
-            client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            client.searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(base, fake.requests.size)
 
             now = MIDNIGHT + 3_601_000 // 01:00:01
-            client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            client.searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(2, tileListCount(fake.requests))
             assertEquals(1, fake.requests.count { it == tileUrl("a") })
         }
@@ -167,10 +168,10 @@ class CacheTest {
             var now = MIDNIGHT
             val fake = setup()
             val client = client(fake, clock = { now })
-            client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            client.searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             fake.goOffline()
             now = MIDNIGHT + 3_601_000
-            assertFails { client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION) }
+            assertFails { client.searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION) }
         }
 
         @Test
@@ -195,7 +196,7 @@ class CacheTest {
         fun `answers from an already-fetched tile without a request`() = runTest {
             val fake = setup()
             val client = client(fake)
-            client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            client.searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             val before = fake.requests.size
             val found = client.getPlace(placeOrigin("a"))
             assertEquals(before, fake.requests.size)
@@ -209,7 +210,7 @@ class CacheTest {
         fun `answers offline for a cached origin`() = runTest {
             val fake = setup()
             val client = client(fake)
-            client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            client.searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             fake.goOffline()
             assertEquals("Shared in A", client.getPlace(placeOrigin("shared")).place["name"].stringOrNull())
         }
@@ -218,7 +219,7 @@ class CacheTest {
         fun `matches the whole origin, not a shared id`() = runTest {
             val fake = setup()
             val client = client(fake)
-            client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            client.searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             val before = fake.requests.size
             val found = client.getPlace(OTHER_ORIGIN)
             val getPlaces = fake.requests.drop(before).filter { endpointOf(it).endsWith("/xrpc/org.atgeo.getPlace") }
@@ -251,9 +252,9 @@ class CacheTest {
             )
             val client = client(fake)
             // b, then a, then c: the lowest URL is neither the first nor the last cached.
-            client.searchPlaces(Region.Bbox(-100.5, 10.5, -100.4, 10.6), OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
-            client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
-            client.searchPlaces(Region.Bbox(-90.5, 10.5, -90.4, 10.6), OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            client.searchNearby(Region.Bbox(-100.5, 10.5, -100.4, 10.6), OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            client.searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            client.searchNearby(Region.Bbox(-90.5, 10.5, -90.4, 10.6), OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             fake.goOffline()
             assertEquals(
                 listOf(
@@ -274,9 +275,9 @@ class CacheTest {
                 tilesFor = { bbox -> TilesAnswer.Urls(listOf(if (bbox.startsWith("-122")) tileUrl("a") else tileUrl("b"))) },
             )
             val client = client(fake)
-            client.searchPlaces(Region.Bbox(-100.5, 10.5, -100.4, 10.6), OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            client.searchNearby(Region.Bbox(-100.5, 10.5, -100.4, 10.6), OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals("Copy B", client.getPlace(placeOrigin("x")).place["name"].stringOrNull())
-            client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            client.searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             fake.goOffline()
             assertEquals("Copy A", client.getPlace(placeOrigin("x")).place["name"].stringOrNull())
         }
@@ -293,8 +294,8 @@ class CacheTest {
         @Test
         fun `a search over the latest search's tiles reuses their parsed records`() = runTest {
             val client = client(setup())
-            val first = client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
-            val second = client.searchPlaces(region, OVERTURE_DATASET, text = "Alpha", collection = OVERTURE_COLLECTION)
+            val first = client.searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            val second = client.searchNearby(region, OVERTURE_DATASET, text = "Alpha", collection = OVERTURE_COLLECTION)
             assertSame(first.places.first { it.place["name"].stringOrNull() == "Alpha" }.place, second.places.first { it.place["name"].stringOrNull() == "Alpha" }.place)
         }
 
@@ -302,12 +303,12 @@ class CacheTest {
         fun `a tile cached before the latest search is parsed again from its body, to the same result`() = runTest {
             val fake = setup()
             val client = client(fake)
-            val first = client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
-            client.searchPlaces(Region.Circle(lat = 10.0, lon = 10.0, radius = 1000.0), collection = "thing", dataset = "example.org")
+            val first = client.searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            client.searchNearby(Region.Circle(lat = 10.0, lon = 10.0, radius = 1000.0), collection = "thing", dataset = "example.org")
             val before = fake.requests.size
-            val again = client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            val again = client.searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(before, fake.requests.size)
-            assertEquals(first, again)
+            assertEquals(first.rebuilt(NOTHING_SENT), again)
             assertNotSame(first.places.first().place, again.places.first().place)
         }
 
@@ -315,9 +316,9 @@ class CacheTest {
         fun `fetches a tile again once evicted, even though the latest search parsed it`() = runTest {
             val fake = setup()
             val client = budgeted(fake, budget = 1) // every tile evicts itself
-            val first = client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            val first = client.searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             val tileRequests = fake.requests.count { "tiles.example" in it }
-            val second = client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            val second = client.searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             assertEquals(2 * tileRequests, fake.requests.count { "tiles.example" in it })
             assertEquals(first, second)
         }
@@ -338,8 +339,8 @@ class CacheTest {
                 ),
             )
             val client = client(fake)
-            client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
-            client.searchPlaces(Region.Circle(lat = 10.0, lon = 10.0, radius = 1000.0), OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            client.searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            client.searchNearby(Region.Circle(lat = 10.0, lon = 10.0, radius = 1000.0), OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
             fake.goOffline()
             assertEquals("By uri", client.getPlace(uri).place["name"].stringOrNull())
         }
@@ -348,8 +349,8 @@ class CacheTest {
         fun `getPlace finds a place in a cached tile the latest search did not touch`() = runTest {
             val fake = setup()
             val client = client(fake)
-            client.searchPlaces(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
-            client.searchPlaces(Region.Circle(lat = 10.0, lon = 10.0, radius = 1000.0), collection = "thing", dataset = "example.org")
+            client.searchNearby(region, OVERTURE_DATASET, collection = OVERTURE_COLLECTION)
+            client.searchNearby(Region.Circle(lat = 10.0, lon = 10.0, radius = 1000.0), collection = "thing", dataset = "example.org")
             fake.goOffline()
             val found = client.getPlace(placeOrigin("shared"))
             assertEquals("Shared in A", found.place["name"].stringOrNull())

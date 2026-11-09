@@ -118,16 +118,45 @@ private val PUNCTUATION = Regex("\\p{P}+")
 private fun fold(word: String): List<String> =
     word.replace(APOSTROPHES, "").replace(PUNCTUATION, " ").split(" ").filter { it.isNotEmpty() }
 
+/** The tokens match tier compares: each of the first 12 words of the normalized query, folded (contract §7). */
+internal fun queryTokens(query: String): List<String> = query.split(" ").take(MAX_QUERY_TOKENS).flatMap(::fold)
+
 /**
  * Tier 1 when every query token starts some token of one single name or variant, else 2 (contract §7).
  * `query` is already normalized. startsWith compares UTF-16 units, as the reference does.
  */
 internal fun matchTier(query: String, value: JsonObject): Int {
-    val queryTokens = query.split(" ").take(MAX_QUERY_TOKENS).flatMap(::fold)
-    if (queryTokens.isEmpty()) return 1
+    val tokens = queryTokens(query)
+    if (tokens.isEmpty()) return 1
     val exact = nameList(value).any { name ->
         val nameTokens = fold(name)
-        queryTokens.all { q -> nameTokens.any { it.startsWith(q) } }
+        tokens.all { q -> nameTokens.any { it.startsWith(q) } }
     }
     return if (exact) 1 else 2
+}
+
+/**
+ * Whether the server's keyword search would accept the keyword (contract §17): after normalizing and folding,
+ * removing spacing and enclosing marks (which `normalize` leaves), recomposing with NFC and dropping duplicates,
+ * one of the first 12 words has two or more code points, counted in code points, not UTF-16 units. Not
+ * [matchTier]'s tokenization, which takes 12 words before folding and does not deduplicate.
+ */
+internal fun qualifies(keyword: String): Boolean {
+    val words = normalize(keyword).split(" ").flatMap(::fold).map(::withoutSpacingMarks).filter { it.isNotEmpty() }
+        .map { Normalizer.normalize(it, Normalizer.Form.NFC) }
+    return words.distinct().take(MAX_QUERY_TOKENS).any { it.codePointCount(0, it.length) >= 2 }
+}
+
+// Removes every scalar whose general category is Mc (spacing mark) or Me (enclosing mark).
+private fun withoutSpacingMarks(word: String): String {
+    val out = StringBuilder(word.length)
+    var i = 0
+    while (i < word.length) {
+        val cp = word.codePointAt(i)
+        i += Character.charCount(cp)
+        val type = Character.getType(cp)
+        if (type == Character.COMBINING_SPACING_MARK.toInt() || type == Character.ENCLOSING_MARK.toInt()) continue
+        out.appendCodePoint(cp)
+    }
+    return out.toString()
 }
